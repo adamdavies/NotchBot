@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+dist/
+*.dmg
+.DS_Store
+Packaging/NotchBot.iconset/
+xcuserdata/
+*.xcuserstate

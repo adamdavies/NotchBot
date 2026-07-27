@@ -1,0 +1,11 @@
+{
+  "tileWidth": 48,
+  "tileHeight": 48,
+  "columns": 6,
+  "rows": 3,
+  "animations": {
+    "idle": { "row": 0, "frames": [0, 1, 2, 3], "framesPerSecond": 2 },
+    "working": { "row": 1, "frames": [0, 1, 2, 3, 4, 5], "framesPerSecond": 8 },
+    "attention": { "row": 2, "frames": [0, 1, 2, 3], "framesPerSecond": 6 }
+  }
+}
