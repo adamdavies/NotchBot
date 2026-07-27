@@ -10,7 +10,7 @@ The first release supports OpenCode and Claude Code on Apple Silicon Macs runnin
 
 ## Install
 
-Download `NotchBot-0.1.0.dmg` from the [latest GitHub release](https://github.com/adamdaviesme/NotchBot/releases/latest), open it, and move NotchBot into `/Applications`.
+Download `NotchBot-0.1.0.dmg` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), open it, and move NotchBot into `/Applications`.
 
 The current release is ad-hoc signed rather than notarized. On first launch, right-click NotchBot and select **Open**. If macOS still blocks it, use **System Settings > Privacy & Security > Open Anyway**.
 
