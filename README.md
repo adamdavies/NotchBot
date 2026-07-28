@@ -48,6 +48,71 @@ Open the menu-bar robot and select **Install Integrations** for a first installa
 
 Use **Preview Idle**, **Preview Working**, and **Preview Attention** in the menu to inspect animations without running an agent. Previews can be cancelled manually and stop automatically after 10 seconds.
 
+## Manually Test Queue States
+
+With NotchBot running and its integrations installed, set the helper path once in the shell where you will run the commands:
+
+```sh
+HOOK="$HOME/Library/Application Support/NotchBot/bin/notchbot-hook"
+```
+
+The examples use reserved `notchbot-demo-*` session IDs and do not clear genuine queue entries. Run the cleanup command before switching scenarios if you want to inspect one state at a time.
+
+Show a parent task as **Working**:
+
+```sh
+printf '%s\n' '{"session_id":"notchbot-demo-parent","cwd":"/tmp/notchbot-demo","task_label":"Demo parent task"}' \
+  | "$HOOK" --source opencode --kind working
+```
+
+Show a tracked task as **Idle** by expiring a dummy attention event:
+
+```sh
+printf '%s\n' '{"session_id":"notchbot-demo-idle","cwd":"/tmp/notchbot-demo","task_label":"Demo idle task"}' \
+  | "$HOOK" --source opencode --kind working
+printf '%s\n' '{"session_id":"notchbot-demo-idle","cwd":"/tmp/notchbot-demo","task_label":"Demo idle task"}' \
+  | "$HOOK" --source opencode --kind attention --reason "Demo finished" --expires-after 0.1
+```
+
+Show a completed parent as persistent **Needs You** attention. It remains in attention until you click the bot or its queue row:
+
+```sh
+printf '%s\n' '{"session_id":"notchbot-demo-parent","cwd":"/tmp/notchbot-demo","task_label":"Demo parent task"}' \
+  | "$HOOK" --source opencode --kind working
+printf '%s\n' '{"session_id":"notchbot-demo-parent","cwd":"/tmp/notchbot-demo","task_label":"Demo parent task"}' \
+  | "$HOOK" --source opencode --kind attention --reason "OpenCode finished working"
+```
+
+Show a working parent with two indented subagents, one Working and one Needs You:
+
+```sh
+printf '%s\n' '{"session_id":"notchbot-demo-parent","cwd":"/tmp/notchbot-demo","task_label":"Demo parent task"}' \
+  | "$HOOK" --source opencode --kind working
+printf '%s\n' '{"session_id":"notchbot-demo-child-working","parent_session_id":"notchbot-demo-parent","cwd":"/tmp/notchbot-demo","task_label":"Working subagent"}' \
+  | "$HOOK" --source opencode --kind working
+printf '%s\n' '{"session_id":"notchbot-demo-child-attention","parent_session_id":"notchbot-demo-parent","cwd":"/tmp/notchbot-demo","task_label":"Waiting subagent"}' \
+  | "$HOOK" --source opencode --kind attention --reason "OpenCode needs permission"
+```
+
+Simulate successful subagent completion. This removes only that child without triggering attention:
+
+```sh
+printf '%s\n' '{"session_id":"notchbot-demo-child-working","parent_session_id":"notchbot-demo-parent"}' \
+  | "$HOOK" --source opencode --kind cleared
+```
+
+Clear every dummy item created by these examples. Clearing the parent also removes any descendants, while the other IDs make cleanup safe if a scenario was run independently:
+
+```sh
+for id in \
+  notchbot-demo-parent \
+  notchbot-demo-child-working \
+  notchbot-demo-child-attention \
+  notchbot-demo-idle; do
+  printf '{"session_id":"%s"}\n' "$id" | "$HOOK" --source opencode --kind cleared
+done
+```
+
 ## Regenerate The Sprite Sheet
 
 The checked-in PNG is generated from integer pixel geometry:
