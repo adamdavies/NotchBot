@@ -16,6 +16,8 @@ public enum OpenCodePlugin {
         const hookPath = \(pathLiteral)
         const taskLabels = new Map()
         const sessionParents = new Map()
+        const completedSessions = new Set()
+        const waitingSessions = new Set()
         let sendQueue = Promise.resolve()
         \(excerptStorage)
         function bounded(value, maximum) {
@@ -32,6 +34,11 @@ public enum OpenCodePlugin {
         function setBounded(map, key, value) {
           if (!map.has(key) && map.size >= 256) map.delete(map.keys().next().value)
           map.set(key, value)
+        }
+
+        function addBounded(set, value) {
+          if (!set.has(value) && set.size >= 256) set.delete(set.values().next().value)
+          set.add(value)
         }
 
         function taskLabel(value) {
@@ -83,6 +90,20 @@ public enum OpenCodePlugin {
           const fallbackTaskLabel = taskLabel(project?.name) ?? taskLabel(basename(worktree)) ?? taskLabel(basename(directory)) ?? "OpenCode"
           const sendEvent = (kind, sessionID, reason, expiresAfter, summary) =>
             send(kind, sessionID, sessionParents.get(sessionID), reason, directory, expiresAfter, summary, taskLabels.get(sessionID) ?? fallbackTaskLabel)
+          const sendWorking = (sessionID) => {
+            completedSessions.delete(sessionID)
+            waitingSessions.delete(sessionID)
+            sendEvent("working", sessionID, null, null, null)
+          }
+          const sendCompletion = (sessionID, summary) => {
+            if (waitingSessions.has(sessionID)) return
+            if (sessionParents.get(sessionID)) {
+              sendEvent("cleared", sessionID, null, null, summary)
+            } else if (!completedSessions.has(sessionID)) {
+              addBounded(completedSessions, sessionID)
+              sendEvent("attention", sessionID, "OpenCode finished working", null, summary)
+            }
+          }
           const resolveParentSessionID = async (sessionID, info) => {
             const direct = identifier(info?.parentID)
             if (direct && direct !== sessionID) {
@@ -120,25 +141,27 @@ public enum OpenCodePlugin {
             switch (event.type) {
               case "session.status":
                 if (properties.status?.type === "busy" || properties.status?.type === "retry") {
-                  sendEvent("working", sessionID, null, null, null)
+                  sendWorking(sessionID)
                 } else if (properties.status?.type === "idle") {
                   \(attentionSummary)
-                  if (await resolveParentSessionID(sessionID, properties.info)) sendEvent("cleared", sessionID, null, null, summary)
-                  else sendEvent("attention", sessionID, "OpenCode finished working", 2.5, summary)
+                  await resolveParentSessionID(sessionID, properties.info)
+                  sendCompletion(sessionID, summary)
                 }
                 break
               case "session.idle": {
                 \(attentionSummary)
-                if (await resolveParentSessionID(sessionID, properties.info)) sendEvent("cleared", sessionID, null, null, summary)
-                else sendEvent("attention", sessionID, "OpenCode finished working", 2.5, summary)
+                await resolveParentSessionID(sessionID, properties.info)
+                sendCompletion(sessionID, summary)
                 break
               }
               case "permission.asked":
               case "permission.v2.asked":
+                addBounded(waitingSessions, sessionID)
                 sendEvent("attention", sessionID, "OpenCode needs permission", null, null)
                 break
               case "question.asked":
               case "question.v2.asked":
+                addBounded(waitingSessions, sessionID)
                 sendEvent("attention", sessionID, "OpenCode has a question", null, null)
                 break
               case "permission.replied":
@@ -147,21 +170,24 @@ public enum OpenCodePlugin {
               case "question.v2.replied":
               case "question.rejected":
               case "question.v2.rejected":
-                sendEvent("working", sessionID, null, null, null)
+                sendWorking(sessionID)
                 break
               case "session.error":
+                addBounded(waitingSessions, sessionID)
                 sendEvent("attention", sessionID, "OpenCode encountered an error", null, null)\(errorCleanup)
                 break
               case "session.deleted":
                 sendEvent("cleared", sessionID, null, null, null)
                 taskLabels.delete(sessionID)
                 sessionParents.delete(sessionID)\(deletionCleanup)
+                completedSessions.delete(sessionID)
+                waitingSessions.delete(sessionID)
                 break
             }
           },
           "tool.execute.before": async (input) => {
             if (!sessionParents.has(input.sessionID)) await resolveParentSessionID(input.sessionID)
-            sendEvent("working", input.sessionID, null, null, null)
+            sendWorking(input.sessionID)
           },
           }
         }

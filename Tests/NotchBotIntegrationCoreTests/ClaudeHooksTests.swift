@@ -72,6 +72,14 @@ import Testing
     #expect((hooks["SubagentStart"] as? [[String: Any]])?.count == 1)
     #expect((hooks["SubagentStop"] as? [[String: Any]])?.count == 1)
     #expect(hooks["TaskCreated"] == nil)
+    #expect(hooks["Notification"].flatMap { $0 as? [[String: Any]] }?.contains {
+        $0["matcher"] as? String == "idle_prompt"
+    } == false)
+    let stopGroups = hooks["Stop"] as! [[String: Any]]
+    let stopHandlers = stopGroups[0]["hooks"] as! [[String: Any]]
+    #expect(stopHandlers[0]["args"] as? [String] == [
+        "--source", "claude", "--kind", "attention", "--reason", "Claude Code finished working",
+    ])
     #expect((hooks["UserPromptSubmit"] as? [[String: Any]])?.count == 1)
     #expect((hooks["Custom"] as? [[String: Any]])?.count == 1)
 }

@@ -25,8 +25,7 @@ public enum ClaudeHooks {
         append(event: "PreToolUse", kind: "working", reason: nil, matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
         append(event: "PermissionRequest", kind: "attention", reason: "Claude Code needs permission", matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
         append(event: "Notification", kind: "attention", reason: "Claude Code needs permission", matcher: "permission_prompt|agent_needs_input", expiry: nil, hookPath: hookPath, hooks: &hooks)
-        append(event: "Notification", kind: "attention", reason: "Claude Code finished working", matcher: "idle_prompt", expiry: 2.5, hookPath: hookPath, hooks: &hooks)
-        append(event: "Stop", kind: "attention", reason: "Claude Code finished working", matcher: nil, expiry: 2.5, hookPath: hookPath, hooks: &hooks)
+        append(event: "Stop", kind: "attention", reason: "Claude Code finished working", matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
         append(event: "SessionEnd", kind: "cleared", reason: nil, matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
         result["hooks"] = hooks
         return result
@@ -86,8 +85,10 @@ public enum ClaudeHooks {
             HookSignature(event: "PreToolUse", matcher: nil, arguments: workingArguments),
             HookSignature(event: "PermissionRequest", matcher: nil, arguments: permissionArguments),
             HookSignature(event: "Notification", matcher: "permission_prompt|agent_needs_input", arguments: permissionArguments),
-            HookSignature(event: "Notification", matcher: "idle_prompt", arguments: finishedArguments),
-            HookSignature(event: "Stop", matcher: nil, arguments: finishedArguments),
+            HookSignature(event: "Stop", matcher: nil, arguments: completionArguments),
+            // Recognize and remove the expiring v0.2.1 completion hooks during migration.
+            HookSignature(event: "Notification", matcher: "idle_prompt", arguments: legacyFinishedArguments),
+            HookSignature(event: "Stop", matcher: nil, arguments: legacyFinishedArguments),
             HookSignature(event: "SessionEnd", matcher: nil, arguments: clearedArguments),
         ])
     }
@@ -95,7 +96,8 @@ public enum ClaudeHooks {
     private static let workingArguments = ["--source", "claude", "--kind", "working"]
     private static let metadataArguments = ["--source", "claude", "--kind", "metadata"]
     private static let permissionArguments = ["--source", "claude", "--kind", "attention", "--reason", "Claude Code needs permission"]
-    private static let finishedArguments = ["--source", "claude", "--kind", "attention", "--reason", "Claude Code finished working", "--expires-after", "2.5"]
+    private static let completionArguments = ["--source", "claude", "--kind", "attention", "--reason", "Claude Code finished working"]
+    private static let legacyFinishedArguments = completionArguments + ["--expires-after", "2.5"]
     private static let clearedArguments = ["--source", "claude", "--kind", "cleared"]
 
     private static func append(

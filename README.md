@@ -31,7 +31,7 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 - Click the compact notch panel to focus Terminal, iTerm2, Warp, Ghostty, or Kitty
 - Hover shows a read-only queue of tracked sessions marked Idle, Working, or Needs You, with no done rows or inline actions
 - Subagents are grouped beneath their parent task and count as active bots; successful subagent completion removes the child without triggering attention
-- Parent completion and permission requests still trigger attention, as do subagent permission, question, and actionable error events
+- Parent completion and permission requests remain in attention until clicked, as do subagent permission, question, and actionable error events
 - Clicking an attention row marks it Idle; a subsequent agent event moves it back to Working when work actually resumes
 - When no sessions are tracked, idle hover falls back to the latest locally retained agent-response summary; response excerpts are disabled by default
 - Bounded task labels selected from OpenCode session titles or project metadata and Claude Code's existing `session_title`, `agent_type`, or project-directory basename
