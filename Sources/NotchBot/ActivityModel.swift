@@ -127,7 +127,9 @@ final class ActivityModel: ObservableObject {
             focusMostRecentTerminal()
             return
         }
-        acknowledgeAttention(for: primarySession)
+        if !primarySession.isAwaitingPermissionResolution {
+            acknowledgeAttention(for: primarySession)
+        }
         focusTerminal(for: primarySession)
     }
 
@@ -145,8 +147,22 @@ final class ActivityModel: ObservableObject {
     }
 
     func acknowledgeAndFocus(_ session: SessionActivity) {
-        acknowledgeAttention(for: session)
+        if !session.isAwaitingPermissionResolution {
+            acknowledgeAttention(for: session)
+        }
         focusTerminal(for: session)
+    }
+
+    func respond(to permission: AgentPermissionRequest, for session: SessionActivity, with decision: AgentPermissionDecision) {
+        guard session.permission?.responseToken == permission.responseToken else { return }
+        let response = AgentPermissionResponse(responseToken: permission.responseToken, decision: decision)
+        guard (try? UnixDatagramClient.send(response)) != nil else { return }
+        let change = reducer.markPermissionSubmitted(
+            source: session.source,
+            sessionID: session.sessionID,
+            responseToken: permission.responseToken
+        )
+        publish(change)
     }
 
     func requestNotificationPermission() {

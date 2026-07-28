@@ -13,6 +13,39 @@ public enum AgentEventKind: String, Codable, Sendable {
     case metadata
 }
 
+public struct AgentPermissionRequest: Codable, Equatable, Sendable {
+    public static let maximumSummaryCharacters = 240
+    public static let maximumSummaryBytes = 1_024
+
+    public let responseToken: String
+    public let summary: String
+    public let canAlwaysAllow: Bool
+
+    public init(responseToken: String, summary: String, canAlwaysAllow: Bool) {
+        self.responseToken = responseToken
+        self.summary = summary
+        self.canAlwaysAllow = canAlwaysAllow
+    }
+
+    public static func normalizedSummary(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let sanitized = String(value.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .format
+        })
+        let normalized = sanitized.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        guard !normalized.isEmpty else { return nil }
+
+        var result = ""
+        for character in normalized {
+            guard result.count < maximumSummaryCharacters else { break }
+            let candidate = result + String(character)
+            guard candidate.utf8.count <= maximumSummaryBytes else { break }
+            result = candidate
+        }
+        return result.isEmpty ? nil : result
+    }
+}
+
 public struct AgentEvent: Codable, Equatable, Sendable {
     public static let protocolVersion = 2
 
@@ -29,6 +62,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
     public let expiresAfter: TimeInterval?
     public let summary: String?
     public let taskLabel: String?
+    public let permission: AgentPermissionRequest?
 
     public init(
         source: AgentSource,
@@ -42,7 +76,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         reason: String? = nil,
         expiresAfter: TimeInterval? = nil,
         summary: String? = nil,
-        taskLabel: String? = nil
+        taskLabel: String? = nil,
+        permission: AgentPermissionRequest? = nil
     ) {
         self.version = Self.protocolVersion
         self.source = source
@@ -57,6 +92,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.expiresAfter = expiresAfter
         self.summary = summary
         self.taskLabel = AgentTaskLabel.normalized(taskLabel)
+        self.permission = permission
     }
 
     public var isCompletionAttention: Bool {
@@ -82,6 +118,7 @@ public enum AgentEventValidationError: Error, Equatable, Sendable {
     case invalidTimestamp
     case invalidExpiry
     case invalidProcessID
+    case invalidPermission
 }
 
 public enum AgentEventValidator {
@@ -119,6 +156,13 @@ public enum AgentEventValidator {
            taskLabel.count > AgentTaskLabel.maximumCharacters || AgentTaskLabel.normalized(taskLabel) != taskLabel {
                 throw AgentEventValidationError.stringTooLong("taskLabel")
         }
+        if let permission = event.permission {
+            guard event.kind == .attention, event.source != .preview,
+                  validResponseToken(permission.responseToken),
+                  AgentPermissionRequest.normalizedSummary(permission.summary) == permission.summary else {
+                throw AgentEventValidationError.invalidPermission
+            }
+        }
 
         let timestamp = event.timestamp.timeIntervalSince1970
         guard timestamp.isFinite, abs(event.timestamp.timeIntervalSince(now)) <= maximumTimestampSkew else {
@@ -147,6 +191,12 @@ public enum AgentEventValidator {
     private static func validIdentifier(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 128
             && !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+    }
+
+    public static func validResponseToken(_ value: String) -> Bool {
+        value.utf8.count == 32 && value.utf8.allSatisfy {
+            (48...57).contains($0) || (97...102).contains($0)
+        }
     }
 }
 

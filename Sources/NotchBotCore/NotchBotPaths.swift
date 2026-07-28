@@ -15,4 +15,10 @@ public enum NotchBotPaths {
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("notchbot-hook")
     }
+
+    public static func permissionSocketPath(responseToken: String) -> String {
+        applicationSupportDirectory
+            .appendingPathComponent("permission-\(responseToken).sock")
+            .path
+    }
 }

@@ -82,6 +82,16 @@ import Testing
     ])
     #expect((hooks["UserPromptSubmit"] as? [[String: Any]])?.count == 1)
     #expect((hooks["Custom"] as? [[String: Any]])?.count == 1)
+    let permissionGroups = hooks["PermissionRequest"] as! [[String: Any]]
+    let permissionHandler = (permissionGroups[0]["hooks"] as! [[String: Any]])[0]
+    #expect(permissionHandler["timeout"] as? Int == 245)
+    #expect(permissionHandler["args"] as? [String] == [
+        "--source", "claude", "--kind", "attention", "--reason", "Claude Code needs permission",
+        "--mode", "permission",
+    ])
+    let notificationGroups = hooks["Notification"] as! [[String: Any]]
+    #expect(notificationGroups.count == 1)
+    #expect(notificationGroups[0]["matcher"] as? String == "agent_needs_input")
 }
 
 private func canonicalJSON(_ object: [String: Any]) -> Data {

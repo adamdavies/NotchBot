@@ -60,6 +60,23 @@ public enum OpenCodePlugin {
           return value.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null
         }
 
+        function permissionSummary(properties) {
+          const action = bounded(properties.permission, 128) ?? bounded(properties.type, 128) ?? bounded(properties.title, 128) ?? "Permission"
+          const patterns = Array.isArray(properties.patterns)
+            ? properties.patterns
+            : Array.isArray(properties.pattern) ? properties.pattern : [properties.pattern]
+          const detail = patterns.filter((value) => typeof value === "string" && value.length > 0).slice(0, 3).join(", ")
+          const normalized = `${action}${detail ? `: ${detail}` : ""}`.replace(/\\s+/g, " ").trim()
+          let result = ""
+          for (const character of normalized) {
+            if (Array.from(result).length >= 240) break
+            const candidate = result + character
+            if (new TextEncoder().encode(candidate).length > 1024) break
+            result = candidate
+          }
+          return result || "Permission"
+        }
+
         function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, summary, label) {
           sessionID = identifier(sessionID)
           if (!sessionID) return
@@ -120,6 +137,42 @@ public enum OpenCodePlugin {
             }
             return sessionParents.get(sessionID) ?? null
           }
+          const requestPermission = async (sessionID, properties) => {
+            const requestID = identifier(properties.id ?? properties.permissionID ?? properties.requestID)
+            if (!requestID) {
+              sendEvent("attention", sessionID, "OpenCode needs permission", null, null)
+              return
+            }
+            const args = [hookPath, "--source", "opencode", "--kind", "attention", "--reason", "OpenCode needs permission", "--mode", "permission"]
+            const payload = {
+              session_id: sessionID,
+              parent_session_id: sessionParents.get(sessionID),
+              cwd: bounded(directory, 1024),
+              task_label: taskLabels.get(sessionID) ?? fallbackTaskLabel,
+              permission_summary: permissionSummary(properties),
+              permission_can_always: true,
+            }
+            try {
+              const child = Bun.spawn(args, { stdin: "pipe", stdout: "pipe", stderr: "ignore" })
+              child.stdin.write(JSON.stringify(payload))
+              child.stdin.end()
+              const output = await new Response(child.stdout).text()
+              if (await child.exited !== 0 || !output) return
+              const decision = JSON.parse(output).decision
+              const reply = decision === "allowOnce" ? "once" : decision === "alwaysAllow" ? "always" : decision === "decline" ? "reject" : null
+              if (!reply) return
+              if (typeof client.permission?.reply === "function") {
+                await client.permission.reply({ requestID, reply })
+              } else if (typeof client.postSessionIdPermissionsPermissionId === "function") {
+                await client.postSessionIdPermissionsPermissionId({
+                  path: { id: sessionID, permissionID: requestID },
+                  body: { response: reply },
+                })
+              }
+            } catch (_) {
+              // OpenCode's native permission prompt remains available on helper or API failure.
+            }
+          }
           return {
           event: async ({ event }) => {
             const properties = event.properties ?? {}
@@ -154,10 +207,11 @@ public enum OpenCodePlugin {
                 sendCompletion(sessionID, summary)
                 break
               }
+              case "permission.updated":
               case "permission.asked":
               case "permission.v2.asked":
                 addBounded(waitingSessions, sessionID)
-                sendEvent("attention", sessionID, "OpenCode needs permission", null, null)
+                void requestPermission(sessionID, properties)
                 break
               case "question.asked":
               case "question.v2.asked":

@@ -203,6 +203,40 @@ import Testing
     #expect(!permission.isCompletionAttention)
 }
 
+@Test func submittedPermissionLosesActionsButRetainsAttention() {
+    var reducer = ActivityReducer()
+    let token = String(repeating: "b", count: 32)
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "permission-session",
+        reason: "OpenCode needs permission",
+        permission: AgentPermissionRequest(
+            responseToken: token,
+            summary: "bash: npm test",
+            canAlwaysAllow: true
+        )
+    ))
+
+    #expect(reducer.primarySession?.permission?.responseToken == token)
+    reducer.markPermissionSubmitted(
+        source: .opencode,
+        sessionID: "permission-session",
+        responseToken: token
+    )
+    #expect(reducer.primarySession?.state == .attention)
+    #expect(reducer.primarySession?.permission == nil)
+    #expect(reducer.primarySession?.isAwaitingPermissionResolution == true)
+
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "permission-session",
+        timestamp: Date().addingTimeInterval(1)
+    ))
+    #expect(reducer.primarySession?.isAwaitingPermissionResolution == false)
+}
+
 @Test func summaryStoreKeepsMostRecentSummaryAfterSessionClears() {
     let start = Date(timeIntervalSince1970: 100)
     var store = AgentSummaryStore()

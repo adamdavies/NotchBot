@@ -180,8 +180,10 @@ final class NotchPanelController {
         guard !model.activeSessions.isEmpty else {
             return NSSize(width: 320, height: 104)
         }
-        let visibleRows = min(model.activeSessions.count, 5)
-        return NSSize(width: 380, height: CGFloat(42 + visibleRows * 58))
+        let height = model.activeSessions.prefix(5).reduce(CGFloat(42)) { result, session in
+            result + (session.permission == nil ? 58 : 101)
+        }
+        return NSSize(width: 380, height: height)
     }
 
     private func updateDetailFrame() {

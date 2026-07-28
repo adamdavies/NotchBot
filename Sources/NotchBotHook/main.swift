@@ -24,7 +24,7 @@ do {
     options = try HookInput.parse(arguments: Array(CommandLine.arguments.dropFirst()))
 } catch {
     FileHandle.standardError.write(Data(
-        "usage: notchbot-hook --source <claude|opencode> --kind <working|attention|cleared|metadata> [--reason text] [--expires-after seconds]\n".utf8
+        "usage: notchbot-hook --source <claude|opencode> --kind <working|attention|cleared|metadata> [--reason text] [--expires-after seconds] [--mode permission]\n".utf8
     ))
     exit(64)
 }
@@ -70,6 +70,39 @@ let taskLabel: String? = if isClaudeSubagent {
     HookInput.taskLabel(from: payload, source: options.source)
 }
 
+var permissionServer: PermissionResponseServer?
+var permissionInput: ClaudePermissionInput?
+var permission: AgentPermissionRequest?
+if options.permissionRequest {
+    do {
+        let server = PermissionResponseServer()
+        try server.start()
+        permissionServer = server
+        if source == .claude {
+            let decoded = try ClaudePermissionInput.decode(from: input)
+            permissionInput = decoded
+            permission = AgentPermissionRequest(
+                responseToken: server.responseToken,
+                summary: decoded.summary,
+                canAlwaysAllow: decoded.suggestion != nil
+            )
+        } else if let nativeSummary = payload?.permissionSummary {
+            permission = AgentPermissionRequest(
+                responseToken: server.responseToken,
+                summary: nativeSummary,
+                canAlwaysAllow: payload?.permissionCanAlways ?? false
+            )
+        }
+        guard permission != nil else {
+            server.stop()
+            exit(0)
+        }
+    } catch {
+        permissionServer?.stop()
+        exit(0)
+    }
+}
+
 let event = AgentEvent(
     source: source,
     kind: kind,
@@ -81,12 +114,29 @@ let event = AgentEvent(
     reason: options.reason,
     expiresAfter: options.expiresAfter,
     summary: summary,
-    taskLabel: taskLabel
+    taskLabel: taskLabel,
+    permission: permission
 )
 
 do {
     try UnixDatagramClient.send(JSONEncoder().encode(event))
 } catch {
     // Agent hooks must never fail because the optional UI is not running.
+    permissionServer?.stop()
     exit(0)
+}
+
+if let permissionServer {
+    if let decision = try? permissionServer.receive(timeout: 240) {
+        if source == .claude, let output = ClaudePermissionOutput.encode(
+            decision: decision.rawValue,
+            suggestion: permissionInput?.suggestion
+        ) {
+            FileHandle.standardOutput.write(output)
+        } else if source == .opencode,
+                  let output = try? JSONSerialization.data(withJSONObject: ["decision": decision.rawValue]) {
+            FileHandle.standardOutput.write(output)
+        }
+    }
+    permissionServer.stop()
 }

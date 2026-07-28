@@ -110,6 +110,73 @@ import Testing
     }
 }
 
+@Test func permissionResponseUsesAnIndependentAuthenticatedEnvelope() throws {
+    let key = SymmetricKey(size: .bits256)
+    let response = AgentPermissionResponse(
+        responseToken: String(repeating: "a", count: 32),
+        decision: .allowOnce
+    )
+    let plaintext = try JSONEncoder().encode(response)
+    let envelope = try SecurePermissionResponseEnvelope.seal(plaintext, using: key)
+
+    #expect(try SecurePermissionResponseEnvelope.open(envelope, using: key) == plaintext)
+    #expect(throws: EventSecurityError.invalidEnvelope) {
+        try SecureEventEnvelope.open(envelope, using: key)
+    }
+    #expect(throws: EventSecurityError.invalidEnvelope) {
+        try SecurePermissionResponseEnvelope.open(envelope, using: SymmetricKey(size: .bits256))
+    }
+}
+
+@Test func permissionResponseSocketDeliversOneAuthenticatedDecision() async throws {
+    let server = PermissionResponseServer()
+    try server.start()
+    defer { server.stop() }
+    let response = AgentPermissionResponse(responseToken: server.responseToken, decision: .decline)
+    let sender = Task.detached {
+        try await Task.sleep(nanoseconds: 20_000_000)
+        try UnixDatagramClient.send(response)
+    }
+
+    #expect(try server.receive(timeout: 1) == .decline)
+    try await sender.value
+}
+
+@Test func permissionMetadataIsStrictlyValidated() throws {
+    let request = AgentPermissionRequest(
+        responseToken: String(repeating: "0", count: 32),
+        summary: "Bash: git status",
+        canAlwaysAllow: true
+    )
+    try AgentEventValidator.validate(AgentEvent(
+        source: .claude,
+        kind: .attention,
+        sessionID: "session",
+        permission: request
+    ))
+
+    #expect(throws: AgentEventValidationError.invalidPermission) {
+        try AgentEventValidator.validate(AgentEvent(
+            source: .claude,
+            kind: .working,
+            sessionID: "session",
+            permission: request
+        ))
+    }
+    #expect(throws: AgentEventValidationError.invalidPermission) {
+        try AgentEventValidator.validate(AgentEvent(
+            source: .opencode,
+            kind: .attention,
+            sessionID: "session",
+            permission: AgentPermissionRequest(
+                responseToken: "../not-a-token",
+                summary: "Edit",
+                canAlwaysAllow: false
+            )
+        ))
+    }
+}
+
 @Test func replayProtectionIsBoundedAndRejectsDuplicates() {
     var replay = ReplayProtection(capacity: 2)
     let first = replay.accept(Data([1]))

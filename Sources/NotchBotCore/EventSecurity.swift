@@ -154,6 +154,42 @@ public enum SecureEventEnvelope {
     }
 }
 
+public enum SecurePermissionResponseEnvelope {
+    private static let header = Data([0x4e, 0x42, 0x50, 0x31]) // NBP1
+
+    public static func seal(_ plaintext: Data, using key: SymmetricKey) throws -> Data {
+        guard plaintext.count <= AgentPermissionResponseValidator.maximumDatagramBytes else {
+            throw EventSecurityError.envelopeTooLarge
+        }
+        let response = try JSONDecoder().decode(AgentPermissionResponse.self, from: plaintext)
+        try AgentPermissionResponseValidator.validate(response, encodedSize: plaintext.count)
+        let box = try ChaChaPoly.seal(plaintext, using: key, authenticating: header)
+        let envelope = header + box.combined
+        guard envelope.count <= AgentPermissionResponseValidator.maximumDatagramBytes else {
+            throw EventSecurityError.envelopeTooLarge
+        }
+        return envelope
+    }
+
+    public static func open(_ envelope: Data, using key: SymmetricKey, now: Date = Date()) throws -> Data {
+        guard envelope.count <= AgentPermissionResponseValidator.maximumDatagramBytes else {
+            throw EventSecurityError.envelopeTooLarge
+        }
+        guard envelope.count >= header.count + 12 + 16, envelope.starts(with: header) else {
+            throw EventSecurityError.invalidEnvelope
+        }
+        do {
+            let box = try ChaChaPoly.SealedBox(combined: envelope.dropFirst(header.count))
+            let plaintext = try ChaChaPoly.open(box, using: key, authenticating: header)
+            let response = try JSONDecoder().decode(AgentPermissionResponse.self, from: plaintext)
+            try AgentPermissionResponseValidator.validate(response, encodedSize: plaintext.count, now: now)
+            return plaintext
+        } catch {
+            throw EventSecurityError.invalidEnvelope
+        }
+    }
+}
+
 public struct ReplayProtection: Sendable {
     private let capacity: Int
     private var order: [Data] = []

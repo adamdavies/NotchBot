@@ -17,6 +17,8 @@ public struct SessionActivity: Equatable, Identifiable, Sendable {
     public var terminalProcessID: Int32?
     public var reason: String?
     public var taskLabel: String?
+    public var permission: AgentPermissionRequest?
+    public var isAwaitingPermissionResolution: Bool
 
     public var id: String { "\(source.rawValue):\(sessionID)" }
     public var isSubagent: Bool { parentSessionID != nil }
@@ -105,7 +107,9 @@ public struct ActivityReducer: Sendable {
                 terminalBundleIdentifier: event.terminalBundleIdentifier ?? sessions[key]?.terminalBundleIdentifier,
                 terminalProcessID: event.terminalProcessID ?? sessions[key]?.terminalProcessID,
                 reason: event.reason,
-                taskLabel: event.taskLabel ?? sessions[key]?.taskLabel ?? pendingMetadata[key]?.taskLabel
+                taskLabel: event.taskLabel ?? sessions[key]?.taskLabel ?? pendingMetadata[key]?.taskLabel,
+                permission: event.permission,
+                isAwaitingPermissionResolution: event.permission != nil
             )
             pendingMetadata.removeValue(forKey: key)
         }
@@ -166,8 +170,22 @@ public struct ActivityReducer: Sendable {
         }
         sessions[key]?.state = .idle
         sessions[key]?.reason = nil
+        sessions[key]?.permission = nil
+        sessions[key]?.isAwaitingPermissionResolution = false
         let current = primarySession
         return ActivityChange(state: current?.state ?? .idle, primarySession: current, shouldNotify: false)
+    }
+
+    @discardableResult
+    public mutating func markPermissionSubmitted(
+        source: AgentSource,
+        sessionID: String,
+        responseToken: String
+    ) -> ActivityChange {
+        let key = Self.key(source: source, sessionID: sessionID)
+        guard sessions[key]?.permission?.responseToken == responseToken else { return currentChange() }
+        sessions[key]?.permission = nil
+        return currentChange()
     }
 
     public var state: RobotState {

@@ -12,6 +12,12 @@ import Testing
     #expect(options.source == "opencode")
     #expect(options.kind == "attention")
     #expect(options.expiresAfter == 2.5)
+    #expect(!options.permissionRequest)
+
+    let permission = try HookInput.parse(arguments: [
+        "--source", "claude", "--kind", "attention", "--mode", "permission",
+    ])
+    #expect(permission.permissionRequest)
 
     #expect(throws: HookInputError.invalidArguments) {
         try HookInput.parse(arguments: ["--source", "opencode", "--kind", "working", "--session", "secret"])
@@ -19,6 +25,43 @@ import Testing
     #expect(throws: HookInputError.invalidArguments) {
         try HookInput.parse(arguments: ["--source", "opencode", "--source", "claude", "--kind", "working"])
     }
+}
+
+@Test func permissionInputIsBoundedAndKeepsOnlyOneNativeSuggestion() throws {
+    let data = Data("""
+    {
+      "tool_name":"Bash",
+      "tool_input":{"command":"  npm   test  ","private":"ignored"},
+      "permission_suggestions":[
+        {"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}
+      ]
+    }
+    """.utf8)
+    let input = try ClaudePermissionInput.decode(from: data)
+    #expect(input.summary == "Bash: npm test")
+    #expect(input.suggestion != nil)
+
+    let always = ClaudePermissionOutput.encode(decision: "alwaysAllow", suggestion: input.suggestion)
+    let object = try JSONSerialization.jsonObject(with: always!) as! [String: Any]
+    let hookOutput = object["hookSpecificOutput"] as! [String: Any]
+    let decision = hookOutput["decision"] as! [String: Any]
+    #expect(decision["behavior"] as? String == "allow")
+    #expect((decision["updatedPermissions"] as? [[String: Any]])?.count == 1)
+
+    let ambiguous = try ClaudePermissionInput.decode(from: Data("""
+    {"tool_name":"Edit","tool_input":{"file_path":"/tmp/a"},"permission_suggestions":[{},{}]}
+    """.utf8))
+    #expect(ambiguous.suggestion == nil)
+    #expect(ClaudePermissionOutput.encode(decision: "alwaysAllow", suggestion: nil) == nil)
+}
+
+@Test func declineOutputDoesNotInterruptClaude() throws {
+    let data = ClaudePermissionOutput.encode(decision: "decline", suggestion: nil)!
+    let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    let hookOutput = object["hookSpecificOutput"] as! [String: Any]
+    let decision = hookOutput["decision"] as! [String: Any]
+    #expect(decision["behavior"] as? String == "deny")
+    #expect(decision["interrupt"] as? Bool == false)
 }
 
 @Test func inputIsBoundedAndOnlyWhitelistedFieldsAreDecoded() throws {

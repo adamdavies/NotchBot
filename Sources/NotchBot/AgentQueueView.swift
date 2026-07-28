@@ -24,14 +24,14 @@ struct AgentQueueView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(model.activeSessions.enumerated()), id: \.element.id) { index, session in
-                        Button {
-                            model.acknowledgeAndFocus(session)
-                        } label: {
-                            AgentQueueRow(session: session)
-                                .frame(height: 57)
-                                .contentShape(Rectangle())
+                        AgentQueueRow(session: session) { permission, decision in
+                            model.respond(to: permission, for: session, with: decision)
                         }
-                        .buttonStyle(.plain)
+                        .frame(height: rowHeight(for: session))
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            model.acknowledgeAndFocus(session)
+                        }
 
                         if index < model.activeSessions.count - 1 {
                             Divider()
@@ -42,7 +42,7 @@ struct AgentQueueView: View {
                 }
             }
         }
-        .frame(width: 380, height: CGFloat(42 + min(model.activeSessions.count, 5) * 58))
+        .frame(width: 380, height: queueHeight)
         .background(cardBackground)
         .contentShape(Rectangle())
         .onHover(perform: onHoverChanged)
@@ -74,10 +74,19 @@ struct AgentQueueView: View {
         }
         return "\(model.activeAgentCount) active · \(idleCount) idle"
     }
+
+    private var queueHeight: CGFloat {
+        42 + model.activeSessions.prefix(5).reduce(0) { $0 + rowHeight(for: $1) + 1 }
+    }
+
+    private func rowHeight(for session: SessionActivity) -> CGFloat {
+        session.permission == nil ? 57 : 100
+    }
 }
 
 private struct AgentQueueRow: View {
     let session: SessionActivity
+    let onPermissionDecision: (AgentPermissionRequest, AgentPermissionDecision) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -92,7 +101,7 @@ private struct AgentQueueRow: View {
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.92))
@@ -112,15 +121,55 @@ private struct AgentQueueRow: View {
                 .font(.system(size: 10, design: .rounded))
                 .foregroundStyle(.white.opacity(0.48))
                 .lineLimit(1)
+
+                if let permission = session.permission {
+                    Text(permission.summary)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    HStack(spacing: 6) {
+                        permissionButton("Allow Once", decision: .allowOnce, permission: permission)
+                        if permission.canAlwaysAllow {
+                            permissionButton("Always", decision: .alwaysAllow, permission: permission)
+                        }
+                        permissionButton("Decline", decision: .decline, permission: permission, destructive: true)
+                    }
+                }
             }
 
             Spacer(minLength: 8)
 
-            Text(statusText)
-                .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(statusColor)
+            if session.permission == nil {
+                Text(statusText)
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(statusColor)
+            }
         }
         .padding(.horizontal, 14)
+    }
+
+    private func permissionButton(
+        _ title: String,
+        decision: AgentPermissionDecision,
+        permission: AgentPermissionRequest,
+        destructive: Bool = false
+    ) -> some View {
+        Button(title) {
+            onPermissionDecision(permission, decision)
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+        .foregroundStyle(destructive ? Color.red.opacity(0.9) : Color.white.opacity(0.9))
+        .padding(.horizontal, 8)
+        .frame(height: 23)
+        .background(
+            Capsule().fill(destructive ? Color.red.opacity(0.14) : Color.white.opacity(0.11))
+        )
+        .overlay {
+            Capsule().stroke(destructive ? Color.red.opacity(0.3) : Color.white.opacity(0.15), lineWidth: 1)
+        }
     }
 
     private var title: String {

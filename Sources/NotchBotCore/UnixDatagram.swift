@@ -20,7 +20,27 @@ public enum UnixDatagramError: Error, LocalizedError {
 public enum UnixDatagramClient {
     public static func send(_ data: Data, to path: String = NotchBotPaths.socketPath) throws {
         let envelope = try SecureEventEnvelope.seal(data, using: EventKeyStore.loadOrCreateKey())
-        guard envelope.count <= AgentEventValidator.maximumDatagramBytes else {
+        try sendEnvelope(envelope, maximumBytes: AgentEventValidator.maximumDatagramBytes, to: path)
+    }
+
+    public static func send(
+        _ response: AgentPermissionResponse,
+        to path: String? = nil
+    ) throws {
+        let plaintext = try JSONEncoder().encode(response)
+        let envelope = try SecurePermissionResponseEnvelope.seal(
+            plaintext,
+            using: EventKeyStore.loadOrCreateKey()
+        )
+        try sendEnvelope(
+            envelope,
+            maximumBytes: AgentPermissionResponseValidator.maximumDatagramBytes,
+            to: path ?? NotchBotPaths.permissionSocketPath(responseToken: response.responseToken)
+        )
+    }
+
+    private static func sendEnvelope(_ envelope: Data, maximumBytes: Int, to path: String) throws {
+        guard envelope.count <= maximumBytes else {
             throw UnixDatagramError.payloadTooLarge
         }
         let descriptor = socket(AF_UNIX, SOCK_DGRAM, 0)

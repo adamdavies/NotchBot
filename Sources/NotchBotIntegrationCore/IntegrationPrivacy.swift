@@ -60,7 +60,7 @@ public struct IntegrationInstallStatus: Codable, Equatable, Sendable {
     public let installedAt: Date
 
     public init(installedAt: Date = Date()) {
-        version = 5
+        version = 6
         self.installedAt = installedAt
     }
 }

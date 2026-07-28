@@ -5,6 +5,7 @@ public struct HookOptions: Equatable, Sendable {
     public let kind: String
     public let reason: String?
     public let expiresAfter: TimeInterval?
+    public let permissionRequest: Bool
 }
 
 public enum HookInputError: Error, Equatable {
@@ -19,7 +20,7 @@ public enum HookInput {
     public static func parse(arguments: [String]) throws -> HookOptions {
         var values: [String: String] = [:]
         var index = 0
-        let allowed = Set(["--source", "--kind", "--reason", "--expires-after"])
+        let allowed = Set(["--source", "--kind", "--reason", "--expires-after", "--mode"])
 
         while index < arguments.count {
             let name = arguments[index]
@@ -43,6 +44,10 @@ public enum HookInput {
         else {
             throw HookInputError.invalidArguments
         }
+        let mode = values["--mode"] ?? "event"
+        guard ["event", "permission"].contains(mode), mode != "permission" || kind == "attention" else {
+            throw HookInputError.invalidArguments
+        }
 
         let expiresAfter: TimeInterval?
         if let value = values["--expires-after"] {
@@ -58,7 +63,8 @@ public enum HookInput {
             source: source,
             kind: kind,
             reason: values["--reason"],
-            expiresAfter: expiresAfter
+            expiresAfter: expiresAfter,
+            permissionRequest: mode == "permission"
         )
     }
 
@@ -80,7 +86,9 @@ public enum HookInput {
                 agentType: boundedLabel(decoded.agentType),
                 taskLabel: boundedLabel(decoded.taskLabel),
                 agentID: try validatedIdentifier(decoded.agentID),
-                parentSessionID: try validatedIdentifier(decoded.parentSessionID)
+                parentSessionID: try validatedIdentifier(decoded.parentSessionID),
+                permissionSummary: permissionSummary(decoded.permissionSummary),
+                permissionCanAlways: decoded.permissionCanAlways ?? false
             )
         }
         guard let decoded = try? JSONDecoder().decode(BasicPayload.self, from: input) else {
@@ -94,7 +102,9 @@ public enum HookInput {
             agentType: boundedLabel(decoded.agentType),
             taskLabel: boundedLabel(decoded.taskLabel),
             agentID: try validatedIdentifier(decoded.agentID),
-            parentSessionID: try validatedIdentifier(decoded.parentSessionID)
+            parentSessionID: try validatedIdentifier(decoded.parentSessionID),
+            permissionSummary: permissionSummary(decoded.permissionSummary),
+            permissionCanAlways: decoded.permissionCanAlways ?? false
         )
     }
 
@@ -144,6 +154,23 @@ public enum HookInput {
         }
         return result.isEmpty ? nil : result
     }
+
+    private static func permissionSummary(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let sanitized = String(value.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .format
+        })
+        let normalized = sanitized.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        guard !normalized.isEmpty else { return nil }
+        var result = ""
+        for character in normalized {
+            guard result.count < 240 else { break }
+            let candidate = result + String(character)
+            guard candidate.utf8.count <= 1_024 else { break }
+            result = candidate
+        }
+        return result.isEmpty ? nil : result
+    }
 }
 
 public struct HookPayload: Equatable, Sendable {
@@ -155,6 +182,8 @@ public struct HookPayload: Equatable, Sendable {
     public let taskLabel: String?
     public let agentID: String?
     public let parentSessionID: String?
+    public let permissionSummary: String?
+    public let permissionCanAlways: Bool
 }
 
 private struct BasicPayload: Decodable {
@@ -165,6 +194,8 @@ private struct BasicPayload: Decodable {
     let taskLabel: String?
     let agentID: String?
     let parentSessionID: String?
+    let permissionSummary: String?
+    let permissionCanAlways: Bool?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -174,6 +205,8 @@ private struct BasicPayload: Decodable {
         case taskLabel = "task_label"
         case agentID = "agent_id"
         case parentSessionID = "parent_session_id"
+        case permissionSummary = "permission_summary"
+        case permissionCanAlways = "permission_can_always"
     }
 }
 
@@ -186,6 +219,8 @@ private struct ExcerptPayload: Decodable {
     let taskLabel: String?
     let agentID: String?
     let parentSessionID: String?
+    let permissionSummary: String?
+    let permissionCanAlways: Bool?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -196,5 +231,74 @@ private struct ExcerptPayload: Decodable {
         case taskLabel = "task_label"
         case agentID = "agent_id"
         case parentSessionID = "parent_session_id"
+        case permissionSummary = "permission_summary"
+        case permissionCanAlways = "permission_can_always"
+    }
+}
+
+public struct ClaudePermissionInput: Equatable, Sendable {
+    public let summary: String
+    public let suggestion: Data?
+
+    public static func decode(from input: Data) throws -> Self {
+        guard input.count <= HookInput.maximumByteCount else { throw HookInputError.inputTooLarge }
+        guard let object = try? JSONSerialization.jsonObject(with: input) as? [String: Any] else {
+            throw HookInputError.invalidJSON
+        }
+        let toolName = normalized(object["tool_name"] as? String, limit: 128) ?? "Tool"
+        let toolInput = object["tool_input"] as? [String: Any] ?? [:]
+        let detailKeys = ["command", "file_path", "path", "notebook_path", "url", "query", "pattern", "description"]
+        let detail = detailKeys.lazy.compactMap { normalized(toolInput[$0] as? String, limit: 180) }.first
+        let summary = normalized(detail.map { "\(toolName): \($0)" } ?? toolName, limit: 240) ?? "Tool permission"
+
+        var suggestion: Data?
+        if let suggestions = object["permission_suggestions"] as? [Any], suggestions.count == 1,
+           suggestions[0] is [String: Any],
+           let encoded = try? JSONSerialization.data(withJSONObject: suggestions[0]),
+           encoded.count <= 16 * 1_024 {
+            suggestion = encoded
+        }
+        return Self(summary: summary, suggestion: suggestion)
+    }
+
+    private static func normalized(_ value: String?, limit: Int) -> String? {
+        guard let value else { return nil }
+        let sanitized = String(value.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .format
+        })
+        let normalized = sanitized.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        guard !normalized.isEmpty else { return nil }
+        return String(normalized.prefix(limit))
+    }
+}
+
+public enum ClaudePermissionOutput {
+    public static func encode(
+        decision: String,
+        suggestion: Data?
+    ) -> Data? {
+        var nativeDecision: [String: Any]
+        switch decision {
+        case "allowOnce":
+            nativeDecision = ["behavior": "allow"]
+        case "alwaysAllow":
+            guard let suggestion,
+                  let object = try? JSONSerialization.jsonObject(with: suggestion) as? [String: Any] else { return nil }
+            nativeDecision = ["behavior": "allow", "updatedPermissions": [object]]
+        case "decline":
+            nativeDecision = [
+                "behavior": "deny",
+                "message": "The user declined this permission request in NotchBot.",
+                "interrupt": false,
+            ]
+        default:
+            return nil
+        }
+        return try? JSONSerialization.data(withJSONObject: [
+            "hookSpecificOutput": [
+                "hookEventName": "PermissionRequest",
+                "decision": nativeDecision,
+            ],
+        ])
     }
 }

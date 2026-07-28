@@ -29,10 +29,11 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 - Concurrent session tracking with attention taking priority over working activity
 - Live agent count opposite the robot, with a yellow waiting badge
 - Click the compact notch panel to focus Terminal, iTerm2, Warp, Ghostty, or Kitty
-- Hover shows a read-only queue of tracked sessions marked Idle, Working, or Needs You, with no done rows or inline actions
+- Hover shows a queue of tracked sessions marked Idle, Working, or Needs You
 - Subagents are grouped beneath their parent task and count as active bots; successful subagent completion removes the child without triggering attention
-- Parent completion and permission requests remain in attention until clicked, as do subagent permission, question, and actionable error events
-- Clicking an attention row marks it Idle; a subsequent agent event moves it back to Working when work actually resumes
+- Permission rows include a bounded native action summary and **Allow Once**, **Always**, and **Decline** controls; Claude's **Always** control appears only for one unambiguous native suggestion
+- Questions, completion, and errors remain presentation-only attention; clicking a permission row or the compact bot focuses the terminal without submitting or hiding the request
+- After a permission response is submitted, its controls disappear while Needs You remains until the provider reports that work resumed
 - When no sessions are tracked, idle hover falls back to the latest locally retained agent-response summary; response excerpts are disabled by default
 - Bounded task labels selected from OpenCode session titles or project metadata and Claude Code's existing `session_title`, `agent_type`, or project-directory basename
 - Local Unix datagram transport with no telemetry, analytics, or intentional Internet requests
