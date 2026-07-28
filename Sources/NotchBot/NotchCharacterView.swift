@@ -32,7 +32,7 @@ private struct BlobCharacter: View {
         ZStack {
             if isIdle {
                 SleepMarks(phase: phase)
-                    .offset(x: 8, y: -7)
+                    .offset(x: 9, y: -8)
             }
 
             arm
@@ -112,7 +112,7 @@ private struct OrbCharacter: View {
         ZStack {
             if isIdle {
                 SleepMarks(phase: phase)
-                    .offset(x: 8, y: -7)
+                    .offset(x: 9, y: -8)
             }
 
             hand
@@ -181,12 +181,12 @@ private struct SleepMarks: View {
     let phase: Double
 
     var body: some View {
-        VStack(spacing: -2) {
+        VStack(spacing: -3) {
             Text("z")
             Text("Z")
         }
-        .font(.system(size: 5, weight: .bold, design: .rounded))
-        .foregroundStyle(.white.opacity(0.55 + sin(phase * 2) * 0.2))
-        .offset(y: CGFloat(-sin(phase * 2) * 0.8))
+        .font(.system(size: 7, weight: .black, design: .rounded))
+        .foregroundStyle(.white.opacity(0.78 + sin(phase * 2) * 0.17))
+        .offset(y: CGFloat(-sin(phase * 2) * 1.2))
     }
 }
