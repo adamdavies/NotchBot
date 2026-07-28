@@ -81,7 +81,7 @@ final class ActivityModel: ObservableObject {
             attentionSequence += 1
             sendNotification(for: event)
         }
-        if event.kind == .attention, event.expiresAfter != nil {
+        if event.kind == .attention, event.expiresAfter != nil, !event.isCompletionAttention {
             expireAttention(event)
         }
     }

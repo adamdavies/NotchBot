@@ -176,6 +176,33 @@ import Testing
     #expect(truncated?.hasSuffix("...") == true)
 }
 
+@Test func completionAttentionIsIdentifiedIndependentlyOfExpiry() {
+    let openCode = AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "one",
+        reason: "OpenCode finished working",
+        expiresAfter: 2.5
+    )
+    let claude = AgentEvent(
+        source: .claude,
+        kind: .attention,
+        sessionID: "two",
+        reason: "Claude Code finished working"
+    )
+    let permission = AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "three",
+        reason: "OpenCode needs permission",
+        expiresAfter: 2.5
+    )
+
+    #expect(openCode.isCompletionAttention)
+    #expect(claude.isCompletionAttention)
+    #expect(!permission.isCompletionAttention)
+}
+
 @Test func summaryStoreKeepsMostRecentSummaryAfterSessionClears() {
     let start = Date(timeIntervalSince1970: 100)
     var store = AgentSummaryStore()

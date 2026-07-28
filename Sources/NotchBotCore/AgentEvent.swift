@@ -58,6 +58,18 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.summary = summary
         self.taskLabel = AgentTaskLabel.normalized(taskLabel)
     }
+
+    public var isCompletionAttention: Bool {
+        guard kind == .attention else { return false }
+        return switch source {
+        case .claude:
+            reason == "Claude Code finished working"
+        case .opencode:
+            reason == "OpenCode finished working"
+        case .preview:
+            false
+        }
+    }
 }
 
 public enum AgentEventValidationError: Error, Equatable, Sendable {
