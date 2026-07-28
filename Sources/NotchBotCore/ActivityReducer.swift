@@ -24,18 +24,35 @@ public struct ActivityChange: Equatable, Sendable {
 }
 
 public struct ActivityReducer: Sendable {
+    public static let maximumSessions = 256
+
     private var sessions: [String: SessionActivity] = [:]
+    private var latestEventAt: [String: Date] = [:]
 
     public init() {}
+
+    public func canApply(_ event: AgentEvent) -> Bool {
+        let key = Self.key(source: event.source, sessionID: event.sessionID)
+        return latestEventAt[key].map { event.timestamp > $0 } ?? true
+    }
 
     @discardableResult
     public mutating func apply(_ event: AgentEvent) -> ActivityChange {
         let key = Self.key(source: event.source, sessionID: event.sessionID)
+        if let latest = latestEventAt[key], event.timestamp <= latest {
+            return currentChange()
+        }
+        latestEventAt[key] = event.timestamp
         let wasAttention = sessions[key]?.state == .attention
 
         if event.kind == .cleared {
             sessions.removeValue(forKey: key)
         } else {
+            if sessions[key] == nil, sessions.count >= Self.maximumSessions,
+               let oldest = sessions.min(by: { $0.value.updatedAt < $1.value.updatedAt })?.key {
+                sessions.removeValue(forKey: oldest)
+                latestEventAt.removeValue(forKey: oldest)
+            }
             sessions[key] = SessionActivity(
                 source: event.source,
                 sessionID: event.sessionID,
@@ -47,6 +64,7 @@ public struct ActivityReducer: Sendable {
                 reason: event.reason
             )
         }
+        trimEventHistory()
 
         let current = primarySession
         return ActivityChange(
@@ -57,7 +75,12 @@ public struct ActivityReducer: Sendable {
     }
 
     public mutating func removeSessions(olderThan cutoff: Date) {
-        sessions = sessions.filter { $0.value.updatedAt >= cutoff }
+        let staleKeys = sessions.compactMap { $0.value.updatedAt < cutoff ? $0.key : nil }
+        for key in staleKeys {
+            sessions.removeValue(forKey: key)
+            latestEventAt.removeValue(forKey: key)
+        }
+        latestEventAt = latestEventAt.filter { $0.value >= cutoff }
     }
 
     @discardableResult
@@ -104,6 +127,19 @@ public struct ActivityReducer: Sendable {
         case .idle: 0
         case .working: 1
         case .attention: 2
+        }
+    }
+
+    private func currentChange() -> ActivityChange {
+        let current = primarySession
+        return ActivityChange(state: current?.state ?? .idle, primarySession: current, shouldNotify: false)
+    }
+
+    private mutating func trimEventHistory() {
+        while latestEventAt.count > Self.maximumSessions {
+            let candidates = latestEventAt.filter { sessions[$0.key] == nil }
+            guard let oldest = candidates.min(by: { $0.value < $1.value })?.key else { return }
+            latestEventAt.removeValue(forKey: oldest)
         }
     }
 }

@@ -13,10 +13,32 @@ final class ActivityModel: ObservableObject {
     @Published private(set) var waitingAgentCount = 0
     @Published private(set) var latestSummary: LatestAgentSummary?
     @Published private(set) var previewState: RobotState?
+    @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
 
     private var reducer = ActivityReducer()
     private var summaryStore = AgentSummaryStore()
     private var previewTask: Task<Void, Never>?
+    private var expiryTasks: [String: Task<Void, Never>] = [:]
+    private var maintenanceTask: Task<Void, Never>?
+    private var responseExcerptsEnabled = false
+
+    init() {
+        maintenanceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.performMaintenance()
+            }
+        }
+    }
+
+    deinit {
+        maintenanceTask?.cancel()
+        previewTask?.cancel()
+        for task in expiryTasks.values {
+            task.cancel()
+        }
+    }
 
     var displayedRobotState: RobotState {
         previewState ?? robotState
@@ -37,13 +59,13 @@ final class ActivityModel: ObservableObject {
     }
 
     func receive(_ event: AgentEvent) {
+        guard (try? AgentEventValidator.validate(event)) != nil, reducer.canApply(event) else { return }
+        let sessionKey = key(for: event)
+        expiryTasks.removeValue(forKey: sessionKey)?.cancel()
         let change = reducer.apply(event)
-        robotState = change.state
-        primarySession = change.primarySession
-        activeAgentCount = reducer.sessionCount
-        waitingAgentCount = reducer.attentionCount
+        publish(change)
 
-        if event.summary != nil {
+        if responseExcerptsEnabled, event.summary != nil {
             latestSummary = summaryStore.apply(event)
         }
 
@@ -80,6 +102,18 @@ final class ActivityModel: ObservableObject {
         previewState = nil
     }
 
+    func clearSummary() {
+        summaryStore = AgentSummaryStore()
+        latestSummary = nil
+    }
+
+    func setResponseExcerptsEnabled(_ enabled: Bool) {
+        responseExcerptsEnabled = enabled
+        if !enabled {
+            clearSummary()
+        }
+    }
+
     func focusPrimaryTerminal() {
         guard let bundleIdentifier = primarySession?.terminalBundleIdentifier else {
             focusMostRecentTerminal()
@@ -94,7 +128,26 @@ final class ActivityModel: ObservableObject {
     }
 
     func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] _, _ in
+            Task { @MainActor in
+                self?.refreshNotificationStatus()
+            }
+        }
+    }
+
+    func refreshNotificationStatus() {
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            Task { @MainActor in
+                self?.notificationAuthorizationStatus = settings.authorizationStatus
+            }
+        }
+    }
+
+    func openNotificationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.notchbot.app") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     private func focusMostRecentTerminal() {
@@ -118,7 +171,7 @@ final class ActivityModel: ObservableObject {
         content.body = event.reason ?? "Your agent is waiting for you."
         content.sound = .default
         let request = UNNotificationRequest(
-            identifier: "\(event.source.rawValue)-\(event.sessionID)-\(event.timestamp.timeIntervalSince1970)",
+            identifier: UUID().uuidString,
             content: content,
             trigger: nil
         )
@@ -126,19 +179,47 @@ final class ActivityModel: ObservableObject {
     }
 
     private func expireAttention(_ event: AgentEvent) {
-        Task { [weak self] in
-            let duration = max(0, event.expiresAfter ?? 0)
-            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+        guard let duration = event.expiresAfter, duration.isFinite, (0...300).contains(duration) else { return }
+        let sessionKey = key(for: event)
+        if expiryTasks[sessionKey] == nil, expiryTasks.count >= ActivityReducer.maximumSessions,
+           let oldestKey = expiryTasks.keys.first {
+            expiryTasks.removeValue(forKey: oldestKey)?.cancel()
+        }
+        let nanoseconds = UInt64(duration * 1_000_000_000)
+        expiryTasks[sessionKey] = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
+            }
             guard let self else { return }
             let change = reducer.expireAttention(
                 source: event.source,
                 sessionID: event.sessionID,
                 unchangedSince: event.timestamp
             )
-            robotState = change.state
-            primarySession = change.primarySession
-            activeAgentCount = reducer.sessionCount
-            waitingAgentCount = reducer.attentionCount
+            expiryTasks.removeValue(forKey: sessionKey)
+            publish(change)
         }
+    }
+
+    private func performMaintenance(now: Date = Date()) {
+        reducer.removeSessions(olderThan: now.addingTimeInterval(-30 * 60))
+        latestSummary = summaryStore.removeLatest(olderThan: now.addingTimeInterval(-15 * 60))
+        robotState = reducer.state
+        primarySession = reducer.primarySession
+        activeAgentCount = reducer.sessionCount
+        waitingAgentCount = reducer.attentionCount
+    }
+
+    private func publish(_ change: ActivityChange) {
+        robotState = change.state
+        primarySession = change.primarySession
+        activeAgentCount = reducer.sessionCount
+        waitingAgentCount = reducer.attentionCount
+    }
+
+    private func key(for event: AgentEvent) -> String {
+        "\(event.source.rawValue):\(event.sessionID)"
     }
 }

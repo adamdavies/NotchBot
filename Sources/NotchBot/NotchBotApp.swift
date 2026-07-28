@@ -11,7 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        model.requestNotificationPermission()
+        model.setResponseExcerptsEnabled(integrations.assistantExcerptsEnabled)
+        model.refreshNotificationStatus()
         panelController = NotchPanelController(model: model)
         panelController?.show()
 
@@ -62,8 +63,29 @@ private struct NotchBotMenu: View {
                 Text(integrations.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button("Install Integrations") { integrations.install() }
-                Button("Remove Integrations") { integrations.uninstall() }
+                if integrations.requiresUpdate {
+                    Button("Update Integrations") { integrations.updateIntegrations() }
+                } else {
+                    Button("Install Integrations") { integrations.install() }
+                }
+                Button("Remove Integrations") {
+                    integrations.uninstall()
+                    model.clearSummary()
+                }
+                Toggle(
+                    "Include Response Excerpts",
+                    isOn: Binding(
+                        get: { integrations.assistantExcerptsEnabled },
+                        set: { enabled in
+                            integrations.setAssistantExcerptsEnabled(enabled)
+                            model.setResponseExcerptsEnabled(integrations.assistantExcerptsEnabled)
+                        }
+                    )
+                )
+                Text("Off by default. Running agent sessions may need restarting after changes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                notificationButton
                 Button(integrations.launchesAtLogin ? "Disable Launch at Login" : "Enable Launch at Login") {
                     integrations.toggleLaunchAtLogin()
                 }
@@ -89,6 +111,22 @@ private struct NotchBotMenu: View {
         case .idle: "No active agents"
         case .working: "An agent is working"
         case .attention: "An agent needs attention"
+        }
+    }
+
+    @ViewBuilder
+    private var notificationButton: some View {
+        switch model.notificationAuthorizationStatus {
+        case .notDetermined:
+            Button("Enable Notifications") { model.requestNotificationPermission() }
+        case .denied:
+            Button("Open Notification Settings") { model.openNotificationSettings() }
+        case .authorized, .provisional, .ephemeral:
+            Text("Notifications enabled")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        @unknown default:
+            EmptyView()
         }
     }
 }

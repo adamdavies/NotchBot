@@ -1,25 +1,7 @@
 import Darwin
 import Foundation
 import NotchBotCore
-
-struct HookPayload: Decodable {
-    let sessionID: String?
-    let cwd: String?
-    let lastAssistantMessage: String?
-
-    enum CodingKeys: String, CodingKey {
-        case sessionID = "session_id"
-        case cwd
-        case lastAssistantMessage = "last_assistant_message"
-    }
-}
-
-func option(_ name: String, in arguments: [String]) -> String? {
-    guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else {
-        return nil
-    }
-    return arguments[index + 1]
-}
+import NotchBotIntegrationCore
 
 func terminalBundleIdentifier(environment: [String: String]) -> String? {
     switch environment["TERM_PROGRAM"]?.lowercased() {
@@ -32,27 +14,46 @@ func terminalBundleIdentifier(environment: [String: String]) -> String? {
     }
 }
 
-let arguments = Array(CommandLine.arguments.dropFirst())
-guard
-    let sourceValue = option("--source", in: arguments),
-    let source = AgentSource(rawValue: sourceValue),
-    let kindValue = option("--kind", in: arguments),
-    let kind = AgentEventKind(rawValue: kindValue)
-else {
-    FileHandle.standardError.write(
-        Data("usage: notchbot-hook --source <claude|opencode> --kind <working|attention|cleared> [--session id] [--reason text]\n".utf8)
-    )
+func bounded(_ value: String?, bytes maximum: Int) -> String? {
+    guard let value, !value.isEmpty, value.utf8.count <= maximum else { return nil }
+    return value
+}
+
+let options: HookOptions
+do {
+    options = try HookInput.parse(arguments: Array(CommandLine.arguments.dropFirst()))
+} catch {
+    FileHandle.standardError.write(Data(
+        "usage: notchbot-hook --source <claude|opencode> --kind <working|attention|cleared> [--reason text] [--expires-after seconds]\n".utf8
+    ))
     exit(64)
 }
 
-let input = FileHandle.standardInput.readDataToEndOfFile()
-let hookPayload = input.isEmpty ? nil : try? JSONDecoder().decode(HookPayload.self, from: input)
+let policyURL = NotchBotIntegrationFiles.privacyPolicyURL(
+    applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+)
+let policy = IntegrationPrivacyPolicy.load(from: policyURL)
+let input = FileHandle.standardInput.readData(ofLength: HookInput.maximumByteCount + 1)
+let payload: HookPayload?
+do {
+    payload = try HookInput.decodePayload(
+        from: input,
+        assistantExcerptsEnabled: policy.assistantExcerptsEnabled
+    )
+} catch {
+    exit(65)
+}
+
 let environment = ProcessInfo.processInfo.environment
-let sessionID = option("--session", in: arguments)
-    ?? hookPayload?.sessionID
-    ?? environment["CLAUDE_SESSION_ID"]
+let source = AgentSource(rawValue: options.source)!
+let kind = AgentEventKind(rawValue: options.kind)!
+let sessionID = payload?.sessionID
+    ?? bounded(environment["CLAUDE_SESSION_ID"], bytes: 128)
     ?? "\(source.rawValue)-\(getppid())"
-let cwd = option("--cwd", in: arguments) ?? hookPayload?.cwd ?? environment["PWD"]
+let cwd = payload?.cwd ?? bounded(environment["PWD"], bytes: 1_024)
+let summary = policy.assistantExcerptsEnabled
+    ? AgentSummaryText.excerpt(from: payload?.lastAssistantMessage ?? "")
+    : nil
 
 let event = AgentEvent(
     source: source,
@@ -61,16 +62,13 @@ let event = AgentEvent(
     workingDirectory: cwd,
     terminalBundleIdentifier: terminalBundleIdentifier(environment: environment),
     terminalProcessID: nil,
-    reason: option("--reason", in: arguments),
-    expiresAfter: option("--expires-after", in: arguments).flatMap(TimeInterval.init),
-    summary: AgentSummaryText.excerpt(
-        from: option("--summary", in: arguments) ?? hookPayload?.lastAssistantMessage ?? ""
-    )
+    reason: options.reason,
+    expiresAfter: options.expiresAfter,
+    summary: summary
 )
 
 do {
-    let data = try JSONEncoder().encode(event)
-    try UnixDatagramClient.send(data)
+    try UnixDatagramClient.send(JSONEncoder().encode(event))
 } catch {
     // Agent hooks must never fail because the optional UI is not running.
     exit(0)

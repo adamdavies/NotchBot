@@ -13,6 +13,8 @@ public enum AgentEventKind: String, Codable, Sendable {
 }
 
 public struct AgentEvent: Codable, Equatable, Sendable {
+    public static let protocolVersion = 2
+
     public let version: Int
     public let source: AgentSource
     public let kind: AgentEventKind
@@ -37,7 +39,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         expiresAfter: TimeInterval? = nil,
         summary: String? = nil
     ) {
-        self.version = 1
+        self.version = Self.protocolVersion
         self.source = source
         self.kind = kind
         self.sessionID = sessionID
@@ -48,6 +50,69 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.reason = reason
         self.expiresAfter = expiresAfter
         self.summary = summary
+    }
+}
+
+public enum AgentEventValidationError: Error, Equatable, Sendable {
+    case payloadTooLarge
+    case unsupportedVersion
+    case previewSourceNotAllowed
+    case invalidSessionID
+    case stringTooLong(String)
+    case invalidTimestamp
+    case invalidExpiry
+    case invalidProcessID
+}
+
+public enum AgentEventValidator {
+    public static let maximumDatagramBytes = 8 * 1024
+    public static let maximumTimestampSkew: TimeInterval = 5 * 60
+
+    public static func validate(
+        _ event: AgentEvent,
+        encodedSize: Int? = nil,
+        now: Date = Date(),
+        allowPreview: Bool = false
+    ) throws {
+        if let encodedSize, encodedSize > maximumDatagramBytes {
+            throw AgentEventValidationError.payloadTooLarge
+        }
+        guard event.version == AgentEvent.protocolVersion else {
+            throw AgentEventValidationError.unsupportedVersion
+        }
+        guard allowPreview || event.source != .preview else {
+            throw AgentEventValidationError.previewSourceNotAllowed
+        }
+        guard !event.sessionID.isEmpty, event.sessionID.utf8.count <= 128 else {
+            throw AgentEventValidationError.invalidSessionID
+        }
+        try check(event.workingDirectory, name: "workingDirectory", maximumBytes: 1_024)
+        try check(event.terminalBundleIdentifier, name: "terminalBundleIdentifier", maximumBytes: 255)
+        try check(event.reason, name: "reason", maximumBytes: 256)
+        try check(event.summary, name: "summary", maximumBytes: 1_024)
+
+        let timestamp = event.timestamp.timeIntervalSince1970
+        guard timestamp.isFinite, abs(event.timestamp.timeIntervalSince(now)) <= maximumTimestampSkew else {
+            throw AgentEventValidationError.invalidTimestamp
+        }
+        if let expiry = event.expiresAfter {
+            guard expiry.isFinite, (0...300).contains(expiry) else {
+                throw AgentEventValidationError.invalidExpiry
+            }
+        }
+        if let processID = event.terminalProcessID, processID <= 0 {
+            throw AgentEventValidationError.invalidProcessID
+        }
+    }
+
+    private static func check(_ value: String?, name: String, maximumBytes: Int) throws {
+        guard let value else { return }
+        guard value.utf8.count <= maximumBytes else {
+            throw AgentEventValidationError.stringTooLong(name)
+        }
+        guard !value.unicodeScalars.contains(where: { $0.value == 0 }) else {
+            throw AgentEventValidationError.stringTooLong(name)
+        }
     }
 }
 
@@ -95,6 +160,14 @@ public struct AgentSummaryStore: Sendable {
             workingDirectory: event.workingDirectory,
             updatedAt: event.timestamp
         )
+        return latest
+    }
+
+    @discardableResult
+    public mutating func removeLatest(olderThan cutoff: Date) -> LatestAgentSummary? {
+        if let latest, latest.updatedAt < cutoff {
+            self.latest = nil
+        }
         return latest
     }
 }

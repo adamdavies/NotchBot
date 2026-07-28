@@ -1,49 +1,108 @@
+import Darwin
 import Foundation
 import NotchBotCore
+import NotchBotIntegrationCore
 import ServiceManagement
 
 @MainActor
 final class IntegrationInstaller: ObservableObject {
     @Published private(set) var message = "Integrations not installed"
     @Published private(set) var launchesAtLogin = SMAppService.mainApp.status == .enabled
+    @Published private(set) var assistantExcerptsEnabled: Bool
+    @Published private(set) var requiresUpdate = false
 
     private let fileManager = FileManager.default
 
     init() {
-        let helperInstalled = fileManager.isExecutableFile(atPath: NotchBotPaths.installedHookURL.path)
-        let openCodeInstalled = fileManager.fileExists(atPath: openCodePluginURL.path)
-        let claudeInstalled = (try? String(contentsOf: claudeSettingsURL, encoding: .utf8))?
-            .contains(NotchBotPaths.installedHookURL.path) == true
-
-        if helperInstalled && openCodeInstalled && claudeInstalled {
-            message = "OpenCode and Claude Code connected"
-        } else if helperInstalled || openCodeInstalled || claudeInstalled {
-            message = "Integration setup incomplete"
-        }
+        let policyURL = NotchBotIntegrationFiles.privacyPolicyURL(
+            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+        )
+        assistantExcerptsEnabled = IntegrationPrivacyPolicy.load(from: policyURL)
+            .assistantExcerptsEnabled
+        refreshStatus()
     }
 
     func install() {
+        performInstallation(allowLegacyUpdate: false)
+    }
+
+    /// This distinct user action is required to replace the less-private v0.1 generated files.
+    func updateIntegrations() {
+        performInstallation(allowLegacyUpdate: true)
+    }
+
+    func setAssistantExcerptsEnabled(_ enabled: Bool) {
         do {
-            let hookURL = try installHookExecutable()
-            try installOpenCodePlugin(hookURL: hookURL)
-            try installClaudeHooks(hookURL: hookURL)
-            message = "OpenCode and Claude Code connected"
+            try preparePrivateSupportDirectory()
+            if itemExists(at: openCodePluginURL) {
+                guard try isOwnedPlugin(at: openCodePluginURL) else {
+                    throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
+                }
+            }
+            if itemExists(at: openCodePluginURL) {
+                try writeOpenCodePlugin(hookURL: NotchBotPaths.installedHookURL, excerptsEnabled: enabled)
+            }
+            do {
+                try writePrivacyPolicy(enabled: enabled)
+            } catch {
+                if itemExists(at: openCodePluginURL) {
+                    try? writeOpenCodePlugin(
+                        hookURL: NotchBotPaths.installedHookURL,
+                        excerptsEnabled: assistantExcerptsEnabled
+                    )
+                }
+                throw error
+            }
+            assistantExcerptsEnabled = enabled
+            message = enabled
+                ? "Assistant excerpts enabled"
+                : "Assistant excerpts disabled"
         } catch {
-            message = "Installation failed: \(error.localizedDescription)"
+            assistantExcerptsEnabled = IntegrationPrivacyPolicy.load(from: privacyPolicyURL)
+                .assistantExcerptsEnabled
+            message = "Privacy setting failed: \(error.localizedDescription)"
         }
+    }
+
+    func toggleAssistantExcerpts() {
+        setAssistantExcerptsEnabled(!assistantExcerptsEnabled)
     }
 
     func uninstall() {
         do {
-            let pluginURL = openCodePluginURL
-            if fileManager.fileExists(atPath: pluginURL.path) {
-                try fileManager.removeItem(at: pluginURL)
+            let pluginExists = itemExists(at: openCodePluginURL)
+            let pluginIsLegacy = pluginExists ? try isLegacyPlugin(at: openCodePluginURL) : false
+            let claudeIsLegacy = try hasManagedClaudeHooks()
+            let pluginIsOwned = pluginExists ? try isOwnedPlugin(at: openCodePluginURL) : false
+            if pluginExists && !pluginIsOwned && !pluginIsLegacy {
+                throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
             }
-            try removeClaudeHooks()
-            if fileManager.fileExists(atPath: NotchBotPaths.installedHookURL.path) {
+            let helperExists = itemExists(at: NotchBotPaths.installedHookURL)
+            let helperIsOwned = helperExists ? try isOwnedHelper() : false
+            if helperExists && !helperIsOwned && !pluginIsLegacy && !claudeIsLegacy {
+                throw IntegrationError.unrelatedManagedFile(NotchBotPaths.installedHookURL.path)
+            }
+            if itemExists(at: helperOwnershipURL), !(try isOwnedHelperMarker()) {
+                throw IntegrationError.unrelatedManagedFile(helperOwnershipURL.path)
+            }
+            if itemExists(at: installStatusURL), !(try isOwnedInstallStatus()) {
+                throw IntegrationError.unrelatedManagedFile(installStatusURL.path)
+            }
+
+            try updateClaudeSettings(install: false)
+            if pluginExists { try fileManager.removeItem(at: openCodePluginURL) }
+            if itemExists(at: NotchBotPaths.installedHookURL) {
                 try fileManager.removeItem(at: NotchBotPaths.installedHookURL)
             }
+            if itemExists(at: helperOwnershipURL) {
+                try fileManager.removeItem(at: helperOwnershipURL)
+            }
+            try removeOwnedBackups()
+            if itemExists(at: installStatusURL) {
+                try fileManager.removeItem(at: installStatusURL)
+            }
             message = "Integrations removed"
+            requiresUpdate = false
         } catch {
             message = "Removal failed: \(error.localizedDescription)"
         }
@@ -62,31 +121,90 @@ final class IntegrationInstaller: ObservableObject {
         }
     }
 
-    private func installHookExecutable() throws -> URL {
-        let destination = NotchBotPaths.installedHookURL
-        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
-        }
+    private func performInstallation(allowLegacyUpdate: Bool) {
+        do {
+            try preparePrivateSupportDirectory()
+            let legacy = try hasLegacyInstallation()
+            if legacy && !allowLegacyUpdate { throw IntegrationError.explicitUpdateRequired }
+            try validateManagedDestinations(allowLegacyUpdate: allowLegacyUpdate && legacy)
+            if allowLegacyUpdate && legacy {
+                try writePrivacyPolicy(enabled: false)
+                assistantExcerptsEnabled = false
+            } else {
+                try writePrivacyPolicy(enabled: assistantExcerptsEnabled)
+            }
 
+            let hookURL = try installHookExecutable(allowLegacyUpdate: allowLegacyUpdate && legacy)
+            try installOpenCodePlugin(
+                hookURL: hookURL,
+                allowLegacyUpdate: allowLegacyUpdate && legacy
+            )
+            try updateClaudeSettings(install: true)
+            try writeInstallStatus()
+            message = "OpenCode and Claude Code connected"
+            requiresUpdate = false
+        } catch {
+            message = "Installation failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func refreshStatus() {
+        guard
+            let data = try? boundedData(at: installStatusURL, maximum: 4_096),
+            let status = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data),
+            status.version == 2,
+            (try? isOwnedHelper()) == true,
+            (try? isOwnedPlugin(at: openCodePluginURL)) == true
+        else {
+            if itemExists(at: NotchBotPaths.installedHookURL) || itemExists(at: openCodePluginURL) {
+                message = "Integration update required"
+                requiresUpdate = true
+            }
+            return
+        }
+        message = "Integration files installed"
+        requiresUpdate = false
+    }
+
+    private func installHookExecutable(allowLegacyUpdate: Bool) throws -> URL {
+        let destination = NotchBotPaths.installedHookURL
+        try preparePrivateSupportDirectory()
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: destination.deletingLastPathComponent().path
+        )
+        if itemExists(at: destination) {
+            guard (try isOwnedHelper()) || allowLegacyUpdate else {
+                throw IntegrationError.unrelatedManagedFile(destination.path)
+            }
+        }
+        if itemExists(at: helperOwnershipURL), !(try regularFile(at: helperOwnershipURL)) {
+            throw IntegrationError.unrelatedManagedFile(helperOwnershipURL.path)
+        }
         guard let source = bundledHookExecutable else {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: "notchbot-hook"])
         }
-        try fileManager.copyItem(at: source, to: destination)
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
+
+        try writeAtomically(Data(contentsOf: source), to: destination, permissions: 0o700)
+        try writeAtomically(
+            Data(NotchBotIntegrationFiles.helperOwnershipMarker.utf8),
+            to: helperOwnershipURL,
+            permissions: 0o600
+        )
         return destination
     }
 
     private var bundledHookExecutable: URL? {
-        if let helper = Bundle.main.url(forAuxiliaryExecutable: "notchbot-hook") {
-            return helper
-        }
+        if let helper = Bundle.main.url(forAuxiliaryExecutable: "notchbot-hook") { return helper }
         let packagedHelper = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers", isDirectory: true)
             .appendingPathComponent("notchbot-hook")
-        if fileManager.isExecutableFile(atPath: packagedHelper.path) {
-            return packagedHelper
-        }
+        if fileManager.isExecutableFile(atPath: packagedHelper.path) { return packagedHelper }
         guard let executable = Bundle.main.executableURL else { return nil }
         let developmentHelper = executable.deletingLastPathComponent().appendingPathComponent("notchbot-hook")
         return fileManager.isExecutableFile(atPath: developmentHelper.path) ? developmentHelper : nil
@@ -98,194 +216,305 @@ final class IntegrationInstaller: ObservableObject {
             .appendingPathComponent("notchbot.js")
     }
 
-    private func installOpenCodePlugin(hookURL: URL) throws {
-        let pluginURL = openCodePluginURL
-        try fileManager.createDirectory(at: pluginURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let escapedHookPath = hookURL.path
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-
-        let plugin = """
-        // Generated by NotchBot. Remove this file to disable the integration.
-        const hookPath = "\(escapedHookPath)"
-
-        const messageSessions = new Map()
-        const latestResponses = new Map()
-
-        function excerpt(value) {
-          if (!value) return null
-          const normalized = value.replace(/\\s+/g, " ").trim()
-          return normalized.length > 240 ? normalized.slice(0, 237).trimEnd() + "..." : normalized
+    private func installOpenCodePlugin(hookURL: URL, allowLegacyUpdate: Bool) throws {
+        if itemExists(at: openCodePluginURL) {
+            let replaceable = try isOwnedPlugin(at: openCodePluginURL)
+                || (allowLegacyUpdate && isLegacyPlugin(at: openCodePluginURL))
+            guard replaceable else {
+                throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
+            }
         }
+        try writeOpenCodePlugin(hookURL: hookURL, excerptsEnabled: assistantExcerptsEnabled)
+    }
 
-        function send(kind, sessionID, reason, directory, expiresAfter, summary) {
-          const args = [hookPath, "--source", "opencode", "--kind", kind, "--session", sessionID]
-          if (reason) args.push("--reason", reason)
-          if (directory) args.push("--cwd", directory)
-          if (expiresAfter) args.push("--expires-after", String(expiresAfter))
-          if (summary) args.push("--summary", excerpt(summary))
-          const process = Bun.spawn(args, { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
-          process.unref()
-        }
-
-        export const NotchBot = async ({ directory }) => ({
-          event: async ({ event }) => {
-            const properties = event.properties ?? {}
-            const sessionID = properties.sessionID ?? properties.info?.id
-
-            if (event.type === "message.updated" && properties.info?.role === "assistant") {
-              messageSessions.set(properties.info.id, properties.info.sessionID)
-            }
-            if (event.type === "message.part.updated" && properties.part?.type === "text") {
-              const partSessionID = messageSessions.get(properties.part.messageID)
-              if (partSessionID) latestResponses.set(partSessionID, properties.part.text)
-            }
-            if (!sessionID) return
-
-            switch (event.type) {
-              case "session.status":
-                if (properties.status?.type === "busy" || properties.status?.type === "retry") {
-                  send("working", sessionID, null, directory, null, null)
-                } else if (properties.status?.type === "idle") {
-                  send("attention", sessionID, "OpenCode finished working", directory, 2.5, latestResponses.get(sessionID))
-                }
-                break
-              case "session.idle":
-                send("attention", sessionID, "OpenCode finished working", directory, 2.5, latestResponses.get(sessionID))
-                break
-              case "permission.asked":
-              case "permission.v2.asked":
-                send("attention", sessionID, "OpenCode needs permission", directory, null, null)
-                break
-              case "question.asked":
-              case "question.v2.asked":
-                send("attention", sessionID, "OpenCode has a question", directory, null, null)
-                break
-              case "permission.replied":
-              case "permission.v2.replied":
-              case "question.replied":
-              case "question.v2.replied":
-                send("working", sessionID, null, directory, null, null)
-                break
-              case "session.error":
-                send("attention", sessionID, "OpenCode encountered an error", directory, null, null)
-                break
-              case "session.deleted":
-                send("cleared", sessionID, null, directory, null, null)
-                latestResponses.delete(sessionID)
-                break
-            }
-          },
-          "tool.execute.before": async (input) => {
-            send("working", input.sessionID, null, directory, null, null)
-          },
-        })
-        """
-        try Data(plugin.utf8).write(to: pluginURL, options: .atomic)
+    private func writeOpenCodePlugin(hookURL: URL, excerptsEnabled: Bool) throws {
+        try fileManager.createDirectory(
+            at: openCodePluginURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let plugin = OpenCodePlugin.generate(
+            hookPath: hookURL.path,
+            assistantExcerptsEnabled: excerptsEnabled
+        )
+        try writeAtomically(Data(plugin.utf8), to: openCodePluginURL, permissions: 0o600)
     }
 
     private var claudeSettingsURL: URL {
         fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json")
     }
 
-    private func installClaudeHooks(hookURL: URL) throws {
+    private func updateClaudeSettings(install: Bool) throws {
         let settingsURL = claudeSettingsURL
+        if !install && !itemExists(at: settingsURL) { return }
         try fileManager.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        var settings = try readJSONObject(at: settingsURL)
-        var hooks = settings["hooks"] as? [String: Any] ?? [:]
-
-        hooks = removingNotchBotHooks(from: hooks)
-        appendClaudeHook(event: "UserPromptSubmit", kind: "working", reason: nil, matcher: nil, expiresAfter: nil, hookURL: hookURL, hooks: &hooks)
-        appendClaudeHook(event: "PreToolUse", kind: "working", reason: nil, matcher: nil, expiresAfter: nil, hookURL: hookURL, hooks: &hooks)
-        appendClaudeHook(event: "PermissionRequest", kind: "attention", reason: "Claude Code needs permission", matcher: nil, expiresAfter: nil, hookURL: hookURL, hooks: &hooks)
-        appendClaudeHook(event: "Notification", kind: "attention", reason: "Claude Code needs permission", matcher: "permission_prompt|agent_needs_input", expiresAfter: nil, hookURL: hookURL, hooks: &hooks)
-        appendClaudeHook(event: "Notification", kind: "attention", reason: "Claude Code finished working", matcher: "idle_prompt", expiresAfter: 2.5, hookURL: hookURL, hooks: &hooks)
-        appendClaudeHook(event: "Stop", kind: "attention", reason: "Claude Code finished working", matcher: nil, expiresAfter: 2.5, hookURL: hookURL, hooks: &hooks)
-        appendClaudeHook(event: "SessionEnd", kind: "cleared", reason: nil, matcher: nil, expiresAfter: nil, hookURL: hookURL, hooks: &hooks)
-        settings["hooks"] = hooks
-
-        if fileManager.fileExists(atPath: settingsURL.path) {
-            let backupURL = settingsURL.appendingPathExtension("notchbot-backup")
-            try? fileManager.removeItem(at: backupURL)
-            try fileManager.copyItem(at: settingsURL, to: backupURL)
+        if itemExists(at: settingsURL), !(try regularFile(at: settingsURL)) {
+            throw IntegrationError.unsafeClaudeSettings
         }
-        let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        try data.write(to: settingsURL, options: .atomic)
-    }
 
-    private func appendClaudeHook(
-        event: String,
-        kind: String,
-        reason: String?,
-        matcher: String?,
-        expiresAfter: TimeInterval?,
-        hookURL: URL,
-        hooks: inout [String: Any]
-    ) {
-        var args = ["--source", "claude", "--kind", kind]
-        if let reason {
-            args += ["--reason", reason]
-        }
-        if let expiresAfter {
-            args += ["--expires-after", String(expiresAfter)]
-        }
-        let handler: [String: Any] = [
-            "type": "command",
-            "command": hookURL.path,
-            "args": args,
-            "timeout": 5,
-        ]
-        var group: [String: Any] = ["hooks": [handler]]
-        if let matcher {
-            group["matcher"] = matcher
-        }
-        var groups = hooks[event] as? [[String: Any]] ?? []
-        groups.append(group)
-        hooks[event] = groups
-    }
+        let originalData = itemExists(at: settingsURL)
+            ? try boundedData(at: settingsURL, maximum: 4 * 1_024 * 1_024)
+            : Data()
+        let originalMode = try fileMode(at: settingsURL) ?? 0o600
+        let originalSettings = try decodeJSONObject(originalData)
+        let updatedSettings = install
+            ? ClaudeHooks.merging(into: originalSettings, hookPath: NotchBotPaths.installedHookURL.path)
+            : ClaudeHooks.removing(from: originalSettings, hookPath: NotchBotPaths.installedHookURL.path)
+        let updatedData = try JSONSerialization.data(
+            withJSONObject: updatedSettings,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        )
 
-    private func removeClaudeHooks() throws {
-        let settingsURL = claudeSettingsURL
-        guard fileManager.fileExists(atPath: settingsURL.path) else { return }
-        var settings = try readJSONObject(at: settingsURL)
-        let hooks = settings["hooks"] as? [String: Any] ?? [:]
-        settings["hooks"] = removingNotchBotHooks(from: hooks)
-        let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        try data.write(to: settingsURL, options: .atomic)
-    }
-
-    private func removingNotchBotHooks(from hooks: [String: Any]) -> [String: Any] {
-        var result: [String: Any] = [:]
-        for (event, value) in hooks {
-            guard let groups = value as? [[String: Any]] else {
-                result[event] = value
-                continue
+        let backupURL = try createSettingsBackup(data: originalData)
+        do {
+            let currentData = itemExists(at: settingsURL)
+                ? try boundedData(at: settingsURL, maximum: 4 * 1_024 * 1_024)
+                : Data()
+            guard currentData == originalData else { throw IntegrationError.concurrentSettingsChange }
+            try writeAtomically(updatedData, to: settingsURL, permissions: originalMode)
+            let verification = try decodeJSONObject(
+                boundedData(at: settingsURL, maximum: 4 * 1_024 * 1_024)
+            )
+            let expected = try decodeJSONObject(updatedData)
+            guard NSDictionary(dictionary: verification).isEqual(to: expected) else {
+                throw IntegrationError.settingsVerificationFailed
             }
-            let remainingGroups = groups.compactMap { group -> [String: Any]? in
-                guard let handlers = group["hooks"] as? [[String: Any]] else { return group }
-                let remainingHandlers = handlers.filter { handler in
-                    guard let command = handler["command"] as? String else { return true }
-                    return command != NotchBotPaths.installedHookURL.path
-                }
-                guard !remainingHandlers.isEmpty else { return nil }
-                var updated = group
-                updated["hooks"] = remainingHandlers
-                return updated
-            }
-            if !remainingGroups.isEmpty {
-                result[event] = remainingGroups
-            }
+            try fileManager.removeItem(at: backupURL)
+        } catch {
+            // The restrictive backup remains in NotchBot Application Support for recovery.
+            throw error
         }
-        return result
     }
 
-    private func readJSONObject(at url: URL) throws -> [String: Any] {
-        guard fileManager.fileExists(atPath: url.path) else { return [:] }
-        let data = try Data(contentsOf: url)
+    private func createSettingsBackup(data: Data) throws -> URL {
+        let directory = NotchBotIntegrationFiles.backupDirectoryURL(
+            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+        )
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        let url = directory.appendingPathComponent("claude-settings-\(UUID().uuidString).backup")
+        try writeAtomically(data, to: url, permissions: 0o600)
+        return url
+    }
+
+    private func removeOwnedBackups() throws {
+        let directory = NotchBotIntegrationFiles.backupDirectoryURL(
+            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+        )
+        guard itemExists(at: directory) else { return }
+        let entries = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        for entry in entries where entry.lastPathComponent.hasPrefix("claude-settings-")
+            && entry.pathExtension == "backup" {
+            guard try regularFile(at: entry) else { continue }
+            try fileManager.removeItem(at: entry)
+        }
+        if try fileManager.contentsOfDirectory(atPath: directory.path).isEmpty {
+            try fileManager.removeItem(at: directory)
+        }
+    }
+
+    private var privacyPolicyURL: URL {
+        NotchBotIntegrationFiles.privacyPolicyURL(
+            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+        )
+    }
+
+    private var installStatusURL: URL {
+        NotchBotIntegrationFiles.installStatusURL(
+            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+        )
+    }
+
+    private var helperOwnershipURL: URL {
+        NotchBotIntegrationFiles.helperOwnershipURL(helperURL: NotchBotPaths.installedHookURL)
+    }
+
+    private func writePrivacyPolicy(enabled: Bool) throws {
+        let data = try JSONEncoder().encode(IntegrationPrivacyPolicy(assistantExcerptsEnabled: enabled))
+        try writeAtomically(data, to: privacyPolicyURL, permissions: 0o600)
+    }
+
+    private func writeInstallStatus() throws {
+        let data = try JSONEncoder().encode(IntegrationInstallStatus())
+        try writeAtomically(data, to: installStatusURL, permissions: 0o600)
+    }
+
+    private func hasLegacyInstallation() throws -> Bool {
+        if itemExists(at: openCodePluginURL), try isLegacyPlugin(at: openCodePluginURL) {
+            return true
+        }
+        return try hasManagedClaudeHooks()
+    }
+
+    private func hasManagedClaudeHooks() throws -> Bool {
+        guard itemExists(at: claudeSettingsURL), try regularFile(at: claudeSettingsURL) else {
+            return false
+        }
+        let data = try boundedData(at: claudeSettingsURL, maximum: 4 * 1_024 * 1_024)
+        return ClaudeHooks.containsManagedHandlers(
+            in: try decodeJSONObject(data),
+            hookPath: NotchBotPaths.installedHookURL.path
+        )
+    }
+
+    private func validateManagedDestinations(allowLegacyUpdate: Bool) throws {
+        if itemExists(at: openCodePluginURL) {
+            let owned = try isOwnedPlugin(at: openCodePluginURL)
+            let legacy = allowLegacyUpdate ? try isLegacyPlugin(at: openCodePluginURL) : false
+            guard owned || legacy else {
+                throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
+            }
+        }
+        if itemExists(at: NotchBotPaths.installedHookURL) {
+            guard (try isOwnedHelper()) || allowLegacyUpdate else {
+                throw IntegrationError.unrelatedManagedFile(NotchBotPaths.installedHookURL.path)
+            }
+        }
+        if itemExists(at: helperOwnershipURL), !(try isOwnedHelperMarker()) {
+            throw IntegrationError.unrelatedManagedFile(helperOwnershipURL.path)
+        }
+        if itemExists(at: installStatusURL), !(try isOwnedInstallStatus()) {
+            throw IntegrationError.unrelatedManagedFile(installStatusURL.path)
+        }
+    }
+
+    private func isOwnedPlugin(at url: URL) throws -> Bool {
+        guard itemExists(at: url), try regularFile(at: url) else { return false }
+        return OpenCodePlugin.isOwned(try boundedString(at: url, maximum: 128 * 1_024))
+    }
+
+    private func isLegacyPlugin(at url: URL) throws -> Bool {
+        guard itemExists(at: url), try regularFile(at: url) else { return false }
+        return OpenCodePlugin.isLegacyV01(try boundedString(at: url, maximum: 128 * 1_024))
+    }
+
+    private func isOwnedHelper() throws -> Bool {
+        guard
+            itemExists(at: NotchBotPaths.installedHookURL),
+            try regularFile(at: NotchBotPaths.installedHookURL),
+            try isOwnedHelperMarker()
+        else { return false }
+        return true
+    }
+
+    private func isOwnedHelperMarker() throws -> Bool {
+        guard itemExists(at: helperOwnershipURL), try regularFile(at: helperOwnershipURL) else {
+            return false
+        }
+        return try boundedString(at: helperOwnershipURL, maximum: 128)
+            == NotchBotIntegrationFiles.helperOwnershipMarker
+    }
+
+    private func isOwnedInstallStatus() throws -> Bool {
+        guard itemExists(at: installStatusURL), try regularFile(at: installStatusURL) else {
+            return false
+        }
+        let data = try boundedData(at: installStatusURL, maximum: 4_096)
+        return (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 2
+    }
+
+    private func writeAtomically(_ data: Data, to url: URL, permissions: Int) throws {
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if itemExists(at: url), !(try regularFile(at: url)) {
+            throw IntegrationError.unrelatedManagedFile(url.path)
+        }
+        try data.write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+    }
+
+    private func regularFile(at url: URL) throws -> Bool {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            if errno == ENOENT { return false }
+            throw CocoaError(.fileReadUnknown)
+        }
+        return (info.st_mode & S_IFMT) == S_IFREG && info.st_uid == getuid()
+    }
+
+    private func itemExists(at url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0
+    }
+
+    private func fileMode(at url: URL) throws -> Int? {
+        guard itemExists(at: url) else { return nil }
+        return (try fileManager.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue
+    }
+
+    private func boundedData(at url: URL, maximum: Int) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let data = handle.readData(ofLength: maximum + 1)
+        guard data.count <= maximum else { throw IntegrationError.managedFileTooLarge(url.path) }
+        return data
+    }
+
+    private func boundedString(at url: URL, maximum: Int) throws -> String {
+        guard let value = String(data: try boundedData(at: url, maximum: maximum), encoding: .utf8) else {
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        return value
+    }
+
+    private func decodeJSONObject(_ data: Data) throws -> [String: Any] {
         guard !data.isEmpty else { return [:] }
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CocoaError(.propertyListReadCorrupt)
         }
         return object
+    }
+
+    private func preparePrivateSupportDirectory() throws {
+        let directory = NotchBotPaths.applicationSupportDirectory
+        if itemExists(at: directory) {
+            var info = stat()
+            guard lstat(directory.path, &info) == 0,
+                  (info.st_mode & S_IFMT) == S_IFDIR,
+                  info.st_uid == getuid() else {
+                throw IntegrationError.unsafeSupportDirectory
+            }
+        } else {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    }
+}
+
+private enum IntegrationError: LocalizedError {
+    case explicitUpdateRequired
+    case unrelatedManagedFile(String)
+    case unsafeClaudeSettings
+    case concurrentSettingsChange
+    case settingsVerificationFailed
+    case managedFileTooLarge(String)
+    case invalidManagedFile(String)
+    case unsafeSupportDirectory
+
+    var errorDescription: String? {
+        switch self {
+        case .explicitUpdateRequired:
+            "Version 0.1 integrations require an explicit update."
+        case let .unrelatedManagedFile(path):
+            "Refusing to replace an unverified file at \(path)."
+        case .unsafeClaudeSettings:
+            "Claude settings must be a regular file, not a symlink."
+        case .concurrentSettingsChange:
+            "Claude settings changed during installation; no replacement was made."
+        case .settingsVerificationFailed:
+            "Claude settings could not be verified after replacement."
+        case let .managedFileTooLarge(path):
+            "Managed file is unexpectedly large: \(path)."
+        case let .invalidManagedFile(path):
+            "Managed file is invalid: \(path)."
+        case .unsafeSupportDirectory:
+            "NotchBot's Application Support directory is not a private user-owned directory."
+        }
     }
 }
