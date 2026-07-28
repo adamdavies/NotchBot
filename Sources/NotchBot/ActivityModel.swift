@@ -13,6 +13,7 @@ final class ActivityModel: ObservableObject {
     @Published private(set) var waitingAgentCount = 0
     @Published private(set) var latestSummary: LatestAgentSummary?
     @Published private(set) var previewState: RobotState?
+    @Published private(set) var activeSessions: [SessionActivity] = []
     @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
 
     private var reducer = ActivityReducer()
@@ -61,7 +62,9 @@ final class ActivityModel: ObservableObject {
     func receive(_ event: AgentEvent) {
         guard (try? AgentEventValidator.validate(event)) != nil, reducer.canApply(event) else { return }
         let sessionKey = key(for: event)
-        expiryTasks.removeValue(forKey: sessionKey)?.cancel()
+        if event.kind != .metadata {
+            expiryTasks.removeValue(forKey: sessionKey)?.cancel()
+        }
         let change = reducer.apply(event)
         publish(change)
 
@@ -115,7 +118,16 @@ final class ActivityModel: ObservableObject {
     }
 
     func focusPrimaryTerminal() {
-        guard let bundleIdentifier = primarySession?.terminalBundleIdentifier else {
+        guard let primarySession else {
+            focusMostRecentTerminal()
+            return
+        }
+        acknowledgeAttention(for: primarySession)
+        focusTerminal(for: primarySession)
+    }
+
+    func focusTerminal(for session: SessionActivity) {
+        guard let bundleIdentifier = session.terminalBundleIdentifier else {
             focusMostRecentTerminal()
             return
         }
@@ -125,6 +137,11 @@ final class ActivityModel: ObservableObject {
         } else {
             focusMostRecentTerminal()
         }
+    }
+
+    func acknowledgeAndFocus(_ session: SessionActivity) {
+        acknowledgeAttention(for: session)
+        focusTerminal(for: session)
     }
 
     func requestNotificationPermission() {
@@ -203,20 +220,30 @@ final class ActivityModel: ObservableObject {
         }
     }
 
+    private func acknowledgeAttention(for session: SessionActivity) {
+        guard session.state == .attention else { return }
+        let sessionKey = session.id
+        expiryTasks.removeValue(forKey: sessionKey)?.cancel()
+        let change = reducer.acknowledgeAttention(source: session.source, sessionID: session.sessionID)
+        publish(change)
+    }
+
     private func performMaintenance(now: Date = Date()) {
         reducer.removeSessions(olderThan: now.addingTimeInterval(-30 * 60))
         latestSummary = summaryStore.removeLatest(olderThan: now.addingTimeInterval(-15 * 60))
         robotState = reducer.state
         primarySession = reducer.primarySession
-        activeAgentCount = reducer.sessionCount
+        activeAgentCount = reducer.activeCount
         waitingAgentCount = reducer.attentionCount
+        activeSessions = reducer.activities
     }
 
     private func publish(_ change: ActivityChange) {
         robotState = change.state
         primarySession = change.primarySession
-        activeAgentCount = reducer.sessionCount
+        activeAgentCount = reducer.activeCount
         waitingAgentCount = reducer.attentionCount
+        activeSessions = reducer.activities
     }
 
     private func key(for event: AgentEvent) -> String {

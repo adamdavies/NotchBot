@@ -41,6 +41,33 @@ import Testing
     #expect(remainingHooks["Stop"] == nil)
 }
 
+@Test func mergeAddsMetadataHooksAndMigratesPreviousHookSet() {
+    let path = "/tmp/notchbot-hook"
+    let previous: [String: Any] = [
+        "hooks": [
+            "UserPromptSubmit": [[
+                "hooks": [[
+                    "type": "command", "command": path,
+                    "args": ["--source", "claude", "--kind", "working"], "timeout": 5,
+                ]],
+            ]],
+            "Custom": [[
+                "hooks": [[
+                    "type": "command", "command": path,
+                    "args": ["--source", "claude", "--kind", "working"], "timeout": 5,
+                ]],
+            ]],
+        ],
+    ]
+
+    let merged = ClaudeHooks.merging(into: previous, hookPath: path)
+    let hooks = merged["hooks"] as! [String: Any]
+    #expect((hooks["SessionStart"] as? [[String: Any]])?.count == 1)
+    #expect((hooks["TaskCreated"] as? [[String: Any]])?.count == 1)
+    #expect((hooks["UserPromptSubmit"] as? [[String: Any]])?.count == 1)
+    #expect((hooks["Custom"] as? [[String: Any]])?.count == 1)
+}
+
 private func canonicalJSON(_ object: [String: Any]) -> Data {
     try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }

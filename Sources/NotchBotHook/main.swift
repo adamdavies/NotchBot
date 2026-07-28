@@ -24,7 +24,7 @@ do {
     options = try HookInput.parse(arguments: Array(CommandLine.arguments.dropFirst()))
 } catch {
     FileHandle.standardError.write(Data(
-        "usage: notchbot-hook --source <claude|opencode> --kind <working|attention|cleared> [--reason text] [--expires-after seconds]\n".utf8
+        "usage: notchbot-hook --source <claude|opencode> --kind <working|attention|cleared|metadata> [--reason text] [--expires-after seconds]\n".utf8
     ))
     exit(64)
 }
@@ -54,6 +54,9 @@ let cwd = payload?.cwd ?? bounded(environment["PWD"], bytes: 1_024)
 let summary = policy.assistantExcerptsEnabled
     ? AgentSummaryText.excerpt(from: payload?.lastAssistantMessage ?? "")
     : nil
+let taskLabel = source == .claude && kind != .metadata
+    ? nil
+    : HookInput.taskLabel(from: payload, source: options.source)
 
 let event = AgentEvent(
     source: source,
@@ -64,7 +67,8 @@ let event = AgentEvent(
     terminalProcessID: nil,
     reason: options.reason,
     expiresAfter: options.expiresAfter,
-    summary: summary
+    summary: summary,
+    taskLabel: taskLabel
 )
 
 do {

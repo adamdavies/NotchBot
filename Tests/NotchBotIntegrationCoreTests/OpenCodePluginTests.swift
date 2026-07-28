@@ -34,3 +34,23 @@ import Testing
     let plugin = OpenCodePlugin.generate(hookPath: "/tmp/a\"b\\c", assistantExcerptsEnabled: false)
     #expect(plugin.contains("const hookPath = \"/tmp/a\\\"b\\\\c\""))
 }
+
+@Test func pluginCachesOnlyExplicitSessionTitlesAndUsesMetadataFallbacks() {
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", assistantExcerptsEnabled: false)
+
+    #expect(plugin.contains("event.type === \"session.created\" || event.type === \"session.updated\""))
+    #expect(plugin.contains("const label = taskLabel(properties.info?.title)"))
+    #expect(plugin.contains("send(\"metadata\""))
+    #expect(plugin.contains("taskLabels.size >= 256") || plugin.contains("map.size >= 256"))
+    #expect(plugin.contains("payload.task_label = label"))
+    #expect(plugin.contains("project?.name"))
+    #expect(plugin.contains("basename(worktree)"))
+    #expect(plugin.contains("basename(directory)"))
+    #expect(plugin.contains("New session|Child session"))
+    #expect(plugin.contains("taskLabels.delete(sessionID)"))
+    #expect(plugin.contains("let sendQueue = Promise.resolve()"))
+    #expect(plugin.contains("await child.exited"))
+    #expect(plugin.contains("sessionID = identifier(sessionID)"))
+    #expect(!plugin.contains("session_id: bounded(sessionID"))
+    #expect(!plugin.contains("properties.prompt"))
+}

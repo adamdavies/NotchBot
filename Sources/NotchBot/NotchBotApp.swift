@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = ActivityModel()
+    let appearance = AppearanceModel()
     let integrations = IntegrationInstaller()
     private let eventServer = EventServer()
     private var panelController: NotchPanelController?
@@ -13,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         model.setResponseExcerptsEnabled(integrations.assistantExcerptsEnabled)
         model.refreshNotificationStatus()
-        panelController = NotchPanelController(model: model)
+        panelController = NotchPanelController(model: model, appearance: appearance)
         panelController?.show()
 
         do {
@@ -39,7 +40,11 @@ struct NotchBotApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            NotchBotMenu(model: appDelegate.model, integrations: appDelegate.integrations)
+            NotchBotMenu(
+                model: appDelegate.model,
+                appearance: appDelegate.appearance,
+                integrations: appDelegate.integrations
+            )
         } label: {
             Image(nsImage: RobotAtlas.shared.menuBarIcon)
                 .renderingMode(.template)
@@ -51,6 +56,7 @@ struct NotchBotApp: App {
 
 private struct NotchBotMenu: View {
     @ObservedObject var model: ActivityModel
+    @ObservedObject var appearance: AppearanceModel
     @ObservedObject var integrations: IntegrationInstaller
 
     var body: some View {
@@ -59,6 +65,12 @@ private struct NotchBotMenu: View {
                     .font(.headline)
                 Text(statusText)
                     .foregroundStyle(.secondary)
+                Divider()
+                Picker("Character", selection: $appearance.character) {
+                    ForEach(NotchCharacter.allCases) { character in
+                        Text(character.displayName).tag(character)
+                    }
+                }
                 Divider()
                 Text(integrations.message)
                     .font(.caption)

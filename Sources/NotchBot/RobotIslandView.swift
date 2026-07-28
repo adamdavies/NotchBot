@@ -3,7 +3,18 @@ import SwiftUI
 
 struct RobotIslandView: View {
     @ObservedObject var model: ActivityModel
+    @ObservedObject var appearance: AppearanceModel
     let onHoverChanged: (Bool) -> Void
+
+    init(
+        model: ActivityModel,
+        appearance: AppearanceModel,
+        onHoverChanged: @escaping (Bool) -> Void
+    ) {
+        self.model = model
+        self.appearance = appearance
+        self.onHoverChanged = onHoverChanged
+    }
 
     var body: some View {
         TimelineView(.animation(
@@ -27,11 +38,20 @@ struct RobotIslandView: View {
                             .frame(width: 34, height: 34)
                             .scaleEffect(0.9 + pulse * 0.12)
                     }
-                    Image(nsImage: RobotAtlas.shared.frame(state: model.displayedRobotState, index: frame))
-                        .interpolation(.none)
-                        .resizable()
+                    if appearance.character == .retro {
+                        Image(nsImage: RobotAtlas.shared.frame(state: model.displayedRobotState, index: frame))
+                            .interpolation(.none)
+                            .resizable()
+                            .frame(width: 24, height: 24)
+                            .offset(y: jumpOffset(at: timeline.date))
+                    } else {
+                        NotchCharacterView(
+                            character: appearance.character,
+                            state: model.displayedRobotState,
+                            date: timeline.date
+                        )
                         .frame(width: 24, height: 24)
-                        .offset(y: jumpOffset(at: timeline.date))
+                    }
                 }
                 .frame(width: 38)
 
@@ -77,11 +97,6 @@ struct RobotIslandView: View {
                                 lineWidth: 1.8
                             )
                             .opacity(0.48 + pulse * 0.46)
-                            .shadow(
-                                color: .yellow.opacity(0.22 + pulse * 0.38),
-                                radius: 8,
-                                y: 2.5
-                            )
 
                         NotchPulseBorder()
                             .trim(from: sweep.start, to: sweep.end)
@@ -93,7 +108,6 @@ struct RobotIslandView: View {
                                 ),
                                 style: StrokeStyle(lineWidth: 2.4, lineCap: .round)
                             )
-                            .shadow(color: .yellow.opacity(0.82), radius: 7, y: 2)
                     }
                 }
             }

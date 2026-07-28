@@ -10,6 +10,7 @@ public enum AgentEventKind: String, Codable, Sendable {
     case working
     case attention
     case cleared
+    case metadata
 }
 
 public struct AgentEvent: Codable, Equatable, Sendable {
@@ -26,6 +27,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
     public let reason: String?
     public let expiresAfter: TimeInterval?
     public let summary: String?
+    public let taskLabel: String?
 
     public init(
         source: AgentSource,
@@ -37,7 +39,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         terminalProcessID: Int32? = nil,
         reason: String? = nil,
         expiresAfter: TimeInterval? = nil,
-        summary: String? = nil
+        summary: String? = nil,
+        taskLabel: String? = nil
     ) {
         self.version = Self.protocolVersion
         self.source = source
@@ -50,6 +53,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.reason = reason
         self.expiresAfter = expiresAfter
         self.summary = summary
+        self.taskLabel = AgentTaskLabel.normalized(taskLabel)
     }
 }
 
@@ -90,6 +94,11 @@ public enum AgentEventValidator {
         try check(event.terminalBundleIdentifier, name: "terminalBundleIdentifier", maximumBytes: 255)
         try check(event.reason, name: "reason", maximumBytes: 256)
         try check(event.summary, name: "summary", maximumBytes: 1_024)
+        try check(event.taskLabel, name: "taskLabel", maximumBytes: AgentTaskLabel.maximumBytes)
+        if let taskLabel = event.taskLabel,
+           taskLabel.count > AgentTaskLabel.maximumCharacters || AgentTaskLabel.normalized(taskLabel) != taskLabel {
+                throw AgentEventValidationError.stringTooLong("taskLabel")
+        }
 
         let timestamp = event.timestamp.timeIntervalSince1970
         guard timestamp.isFinite, abs(event.timestamp.timeIntervalSince(now)) <= maximumTimestampSkew else {
@@ -113,6 +122,32 @@ public enum AgentEventValidator {
         guard !value.unicodeScalars.contains(where: { $0.value == 0 }) else {
             throw AgentEventValidationError.stringTooLong(name)
         }
+    }
+}
+
+public enum AgentTaskLabel {
+    public static let maximumCharacters = 100
+    public static let maximumBytes = 512
+
+    public static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let sanitized = String(value.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .format
+        })
+        let normalized = sanitized
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        guard !normalized.isEmpty else { return nil }
+
+        var result = ""
+        result.reserveCapacity(min(normalized.utf8.count, maximumBytes))
+        for character in normalized {
+            guard result.count < maximumCharacters else { break }
+            let candidate = result + String(character)
+            guard candidate.utf8.count <= maximumBytes else { break }
+            result = candidate
+        }
+        return result.isEmpty ? nil : result
     }
 }
 

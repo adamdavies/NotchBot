@@ -71,7 +71,9 @@ final class IntegrationInstaller: ObservableObject {
     func uninstall() {
         do {
             let pluginExists = itemExists(at: openCodePluginURL)
-            let pluginIsLegacy = pluginExists ? try isLegacyPlugin(at: openCodePluginURL) : false
+            let pluginIsLegacy = pluginExists
+                ? try isLegacyPlugin(at: openCodePluginURL) || isPreviousPlugin(at: openCodePluginURL)
+                : false
             let claudeIsLegacy = try hasManagedClaudeHooks()
             let pluginIsOwned = pluginExists ? try isOwnedPlugin(at: openCodePluginURL) : false
             if pluginExists && !pluginIsOwned && !pluginIsLegacy {
@@ -124,20 +126,29 @@ final class IntegrationInstaller: ObservableObject {
     private func performInstallation(allowLegacyUpdate: Bool) {
         do {
             try preparePrivateSupportDirectory()
-            let legacy = try hasLegacyInstallation()
-            if legacy && !allowLegacyUpdate { throw IntegrationError.explicitUpdateRequired }
-            try validateManagedDestinations(allowLegacyUpdate: allowLegacyUpdate && legacy)
-            if allowLegacyUpdate && legacy {
+            let outdated = try hasOutdatedInstallation()
+            if outdated && !allowLegacyUpdate { throw IntegrationError.explicitUpdateRequired }
+            let helperUpdateAllowed = if allowLegacyUpdate && outdated {
+                try canReplaceOutdatedHelper()
+            } else {
+                false
+            }
+            try validateManagedDestinations(
+                allowLegacyUpdate: allowLegacyUpdate && outdated,
+                allowHelperUpdate: helperUpdateAllowed
+            )
+            let isV01 = outdated ? try hasV01Installation() : false
+            if allowLegacyUpdate && isV01 {
                 try writePrivacyPolicy(enabled: false)
                 assistantExcerptsEnabled = false
             } else {
                 try writePrivacyPolicy(enabled: assistantExcerptsEnabled)
             }
 
-            let hookURL = try installHookExecutable(allowLegacyUpdate: allowLegacyUpdate && legacy)
+            let hookURL = try installHookExecutable(allowLegacyUpdate: helperUpdateAllowed)
             try installOpenCodePlugin(
                 hookURL: hookURL,
-                allowLegacyUpdate: allowLegacyUpdate && legacy
+                allowLegacyUpdate: allowLegacyUpdate && outdated
             )
             try updateClaudeSettings(install: true)
             try writeInstallStatus()
@@ -152,8 +163,8 @@ final class IntegrationInstaller: ObservableObject {
         guard
             let data = try? boundedData(at: installStatusURL, maximum: 4_096),
             let status = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data),
-            status.version == 2,
-            (try? isOwnedHelper()) == true,
+            status.version == 3,
+            (try? isCurrentOwnedHelper()) == true,
             (try? isOwnedPlugin(at: openCodePluginURL)) == true
         else {
             if itemExists(at: NotchBotPaths.installedHookURL) || itemExists(at: openCodePluginURL) {
@@ -219,7 +230,7 @@ final class IntegrationInstaller: ObservableObject {
     private func installOpenCodePlugin(hookURL: URL, allowLegacyUpdate: Bool) throws {
         if itemExists(at: openCodePluginURL) {
             let replaceable = try isOwnedPlugin(at: openCodePluginURL)
-                || (allowLegacyUpdate && isLegacyPlugin(at: openCodePluginURL))
+                || (allowLegacyUpdate && (isLegacyPlugin(at: openCodePluginURL) || isPreviousPlugin(at: openCodePluginURL)))
             guard replaceable else {
                 throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
             }
@@ -342,11 +353,49 @@ final class IntegrationInstaller: ObservableObject {
         try writeAtomically(data, to: installStatusURL, permissions: 0o600)
     }
 
-    private func hasLegacyInstallation() throws -> Bool {
-        if itemExists(at: openCodePluginURL), try isLegacyPlugin(at: openCodePluginURL) {
+    private func hasOutdatedInstallation() throws -> Bool {
+        if itemExists(at: openCodePluginURL),
+           try isLegacyPlugin(at: openCodePluginURL) || isPreviousPlugin(at: openCodePluginURL) {
             return true
         }
+        if itemExists(at: installStatusURL) {
+            let data = try boundedData(at: installStatusURL, maximum: 4_096)
+            if (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 2 { return true }
+        }
+        if itemExists(at: helperOwnershipURL), try isPreviousHelperMarker() { return true }
+        return try hasManagedClaudeHooks() && !isCurrentInstallationMarked()
+    }
+
+    private func hasV01Installation() throws -> Bool {
+        if itemExists(at: openCodePluginURL), try isLegacyPlugin(at: openCodePluginURL) { return true }
+        return try hasManagedClaudeHooks() && !hasV020OrCurrentMarker()
+    }
+
+    private func canReplaceOutdatedHelper() throws -> Bool {
+        if itemExists(at: helperOwnershipURL), try isOwnedHelperMarker() {
+            return true
+        }
+        guard itemExists(at: openCodePluginURL), try isLegacyPlugin(at: openCodePluginURL) else {
+            return false
+        }
         return try hasManagedClaudeHooks()
+    }
+
+    private func hasV020OrCurrentMarker() throws -> Bool {
+        if itemExists(at: installStatusURL), try isOwnedInstallStatus() { return true }
+        if itemExists(at: helperOwnershipURL), try isOwnedHelperMarker() { return true }
+        if itemExists(at: openCodePluginURL) {
+            return try isOwnedPlugin(at: openCodePluginURL) || isPreviousPlugin(at: openCodePluginURL)
+        }
+        return false
+    }
+
+    private func isCurrentInstallationMarked() -> Bool {
+        guard
+            let data = try? boundedData(at: installStatusURL, maximum: 4_096),
+            (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 3
+        else { return false }
+        return true
     }
 
     private func hasManagedClaudeHooks() throws -> Bool {
@@ -360,16 +409,18 @@ final class IntegrationInstaller: ObservableObject {
         )
     }
 
-    private func validateManagedDestinations(allowLegacyUpdate: Bool) throws {
+    private func validateManagedDestinations(allowLegacyUpdate: Bool, allowHelperUpdate: Bool) throws {
         if itemExists(at: openCodePluginURL) {
             let owned = try isOwnedPlugin(at: openCodePluginURL)
-            let legacy = allowLegacyUpdate ? try isLegacyPlugin(at: openCodePluginURL) : false
+            let legacy = allowLegacyUpdate
+                ? try isLegacyPlugin(at: openCodePluginURL) || isPreviousPlugin(at: openCodePluginURL)
+                : false
             guard owned || legacy else {
                 throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
             }
         }
         if itemExists(at: NotchBotPaths.installedHookURL) {
-            guard (try isOwnedHelper()) || allowLegacyUpdate else {
+            guard (try isOwnedHelper()) || allowHelperUpdate else {
                 throw IntegrationError.unrelatedManagedFile(NotchBotPaths.installedHookURL.path)
             }
         }
@@ -391,6 +442,11 @@ final class IntegrationInstaller: ObservableObject {
         return OpenCodePlugin.isLegacyV01(try boundedString(at: url, maximum: 128 * 1_024))
     }
 
+    private func isPreviousPlugin(at url: URL) throws -> Bool {
+        guard itemExists(at: url), try regularFile(at: url) else { return false }
+        return OpenCodePlugin.isPreviousV020(try boundedString(at: url, maximum: 128 * 1_024))
+    }
+
     private func isOwnedHelper() throws -> Bool {
         guard
             itemExists(at: NotchBotPaths.installedHookURL),
@@ -400,12 +456,28 @@ final class IntegrationInstaller: ObservableObject {
         return true
     }
 
+    private func isCurrentOwnedHelper() throws -> Bool {
+        guard itemExists(at: NotchBotPaths.installedHookURL), try regularFile(at: NotchBotPaths.installedHookURL),
+              itemExists(at: helperOwnershipURL), try regularFile(at: helperOwnershipURL) else { return false }
+        return try boundedString(at: helperOwnershipURL, maximum: 128)
+            == NotchBotIntegrationFiles.helperOwnershipMarker
+    }
+
     private func isOwnedHelperMarker() throws -> Bool {
         guard itemExists(at: helperOwnershipURL), try regularFile(at: helperOwnershipURL) else {
             return false
         }
+        let marker = try boundedString(at: helperOwnershipURL, maximum: 128)
+        return marker == NotchBotIntegrationFiles.helperOwnershipMarker
+            || marker == NotchBotIntegrationFiles.previousHelperOwnershipMarker
+    }
+
+    private func isPreviousHelperMarker() throws -> Bool {
+        guard itemExists(at: helperOwnershipURL), try regularFile(at: helperOwnershipURL) else {
+            return false
+        }
         return try boundedString(at: helperOwnershipURL, maximum: 128)
-            == NotchBotIntegrationFiles.helperOwnershipMarker
+            == NotchBotIntegrationFiles.previousHelperOwnershipMarker
     }
 
     private func isOwnedInstallStatus() throws -> Bool {
@@ -413,7 +485,10 @@ final class IntegrationInstaller: ObservableObject {
             return false
         }
         let data = try boundedData(at: installStatusURL, maximum: 4_096)
-        return (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 2
+        guard let version = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version else {
+            return false
+        }
+        return version == 2 || version == 3
     }
 
     private func writeAtomically(_ data: Data, to url: URL, permissions: Int) throws {
@@ -500,7 +575,7 @@ private enum IntegrationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .explicitUpdateRequired:
-            "Version 0.1 integrations require an explicit update."
+            "Installed integrations require an explicit update."
         case let .unrelatedManagedFile(path):
             "Refusing to replace an unverified file at \(path)."
         case .unsafeClaudeSettings:

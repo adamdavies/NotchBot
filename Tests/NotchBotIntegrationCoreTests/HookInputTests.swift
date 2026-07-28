@@ -39,15 +39,51 @@ import Testing
     }
 }
 
-@Test func oversizedWhitelistedValuesAreDiscarded() throws {
+@Test func oversizedSessionIdentifiersAreRejected() throws {
     let longSession = String(repeating: "s", count: 129)
     let data = try JSONSerialization.data(withJSONObject: ["session_id": longSession])
-    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
-    #expect(payload?.sessionID == nil)
+    #expect(throws: HookInputError.invalidJSON) {
+        try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
+    }
 
     #expect(throws: HookInputError.invalidArguments) {
         try HookInput.parse(arguments: [
             "--source", "claude", "--kind", "attention", "--expires-after", "301",
         ])
     }
+}
+
+@Test func taskMetadataIsAllowlistedAndUsesClaudePrecedence() throws {
+    let data = Data("""
+    {
+      "session_id":"session",
+      "cwd":"/tmp/project",
+      "session_title":"  Session   title  ",
+      "task_subject":"Task subject",
+      "agent_type":"Explore",
+      "task_label":"OpenCode title",
+      "prompt":"private prompt",
+      "task_description":"private description",
+      "transcript":"private transcript"
+    }
+    """.utf8)
+    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
+
+    #expect(payload?.sessionTitle == "Session title")
+    #expect(payload?.taskSubject == "Task subject")
+    #expect(payload?.agentType == "Explore")
+    #expect(HookInput.taskLabel(from: payload, source: "claude") == "Session title")
+    #expect(HookInput.taskLabel(from: payload, source: "opencode") == "OpenCode title")
+}
+
+@Test func taskLabelFallbacksAreBoundedAndDoNotUseExcerptText() throws {
+    let data = Data("""
+    {"cwd":"/tmp/project","last_assistant_message":"private result","prompt":"private prompt"}
+    """.utf8)
+    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: true)
+
+    #expect(HookInput.taskLabel(from: payload, source: "claude") == "project")
+    #expect(HookInput.taskLabel(from: nil, source: "claude") == "Claude Code")
+    #expect(HookInput.taskLabel(from: nil, source: "opencode") == "OpenCode")
+    #expect(HookInput.taskLabel(from: payload, source: "claude") != payload?.lastAssistantMessage)
 }

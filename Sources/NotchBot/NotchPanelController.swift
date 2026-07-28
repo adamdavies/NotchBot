@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -9,8 +10,11 @@ final class NotchPanelController {
     private var summaryPanelHovered = false
     private var hoverTask: Task<Void, Never>?
     private var summaryFrame = NSRect.zero
+    private var cancellables: Set<AnyCancellable> = []
+    private let model: ActivityModel
 
-    init(model: ActivityModel) {
+    init(model: ActivityModel, appearance: AppearanceModel) {
+        self.model = model
         panel = NSPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -43,15 +47,29 @@ final class NotchPanelController {
         summaryPanel.alphaValue = 0
 
         panel.contentView = NSHostingView(
-            rootView: RobotIslandView(model: model) { [weak self] hovering in
+            rootView: RobotIslandView(model: model, appearance: appearance) { [weak self] hovering in
                 self?.setMainPanelHovered(hovering)
             }
         )
         summaryPanel.contentView = NSHostingView(
-            rootView: SummaryCardView(model: model) { [weak self] hovering in
+            rootView: HoverDetailView(model: model) { [weak self] hovering in
                 self?.setSummaryPanelHovered(hovering)
             }
         )
+
+        model.$activeSessions
+            .combineLatest(model.$latestSummary, model.$previewState)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _, _ in
+                guard let self else { return }
+                self.updateDetailFrame()
+                if self.summaryPanel.isVisible, !self.hasDetailContent {
+                    self.forceHideDetailPanel()
+                } else if self.hasDetailContent, !self.summaryPanel.isVisible, self.mainPanelHovered {
+                    self.updateSummaryVisibility()
+                }
+            }
+            .store(in: &cancellables)
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -86,21 +104,7 @@ final class NotchPanelController {
             display: true
         )
 
-        let cardSize = NSSize(width: 320, height: 104)
-        let cardTop = screenFrame.maxY - geometry.coverageHeight - 4
-        let cardX = min(
-            max(screenFrame.minX + 8, screenFrame.midX - cardSize.width / 2),
-            screenFrame.maxX - cardSize.width - 8
-        )
-        summaryFrame = NSRect(
-            x: cardX,
-            y: cardTop - cardSize.height,
-            width: cardSize.width,
-            height: cardSize.height
-        )
-        if summaryPanel.isVisible {
-            summaryPanel.setFrame(summaryFrame, display: true)
-        }
+        updateDetailFrame(screen: screen, geometry: geometry)
     }
 
     private func setMainPanelHovered(_ hovering: Bool) {
@@ -115,7 +119,7 @@ final class NotchPanelController {
 
     private func updateSummaryVisibility() {
         hoverTask?.cancel()
-        let shouldShow = mainPanelHovered || summaryPanelHovered
+        let shouldShow = (mainPanelHovered || summaryPanelHovered) && hasDetailContent
         hoverTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(nanoseconds: shouldShow ? 120_000_000 : 240_000_000)
@@ -132,6 +136,8 @@ final class NotchPanelController {
     }
 
     private func showSummaryPanel() {
+        guard hasDetailContent else { return }
+        updateDetailFrame()
         if summaryPanel.isVisible {
             summaryPanel.alphaValue = 1
             return
@@ -150,6 +156,10 @@ final class NotchPanelController {
     }
 
     private func hideSummaryPanel() {
+        guard hasDetailContent else {
+            forceHideDetailPanel()
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -160,6 +170,51 @@ final class NotchPanelController {
                 self.summaryPanel.orderOut(nil)
             }
         }
+    }
+
+    private var hasDetailContent: Bool {
+        !model.isPreviewing && (!model.activeSessions.isEmpty || model.latestSummary != nil)
+    }
+
+    private var detailSize: NSSize {
+        guard !model.activeSessions.isEmpty else {
+            return NSSize(width: 320, height: 104)
+        }
+        let visibleRows = min(model.activeSessions.count, 5)
+        return NSSize(width: 380, height: CGFloat(42 + visibleRows * 58))
+    }
+
+    private func updateDetailFrame() {
+        guard let screen = preferredScreen else { return }
+        updateDetailFrame(screen: screen, geometry: NotchGeometry(screen: screen))
+    }
+
+    private func updateDetailFrame(screen: NSScreen, geometry: NotchGeometry) {
+        let size = detailSize
+        let screenFrame = geometry.screenFrame
+        let cardTop = screenFrame.maxY - geometry.coverageHeight - 4
+        let cardX = min(
+            max(screenFrame.minX + 8, screenFrame.midX - size.width / 2),
+            screenFrame.maxX - size.width - 8
+        )
+        summaryFrame = NSRect(
+            x: cardX,
+            y: cardTop - size.height,
+            width: size.width,
+            height: size.height
+        )
+        if summaryPanel.isVisible {
+            summaryPanel.contentView?.layer?.removeAllAnimations()
+            summaryPanel.setFrame(summaryFrame, display: true)
+        }
+    }
+
+    private func forceHideDetailPanel() {
+        hoverTask?.cancel()
+        summaryPanelHovered = false
+        summaryPanel.contentView?.layer?.removeAllAnimations()
+        summaryPanel.alphaValue = 0
+        summaryPanel.orderOut(nil)
     }
 
     private var preferredScreen: NSScreen? {
