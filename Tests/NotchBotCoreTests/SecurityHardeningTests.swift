@@ -146,6 +146,7 @@ import Testing
     let request = AgentPermissionRequest(
         responseToken: String(repeating: "0", count: 32),
         summary: "Bash: git status",
+        context: "git status --short",
         canAlwaysAllow: true
     )
     try AgentEventValidator.validate(AgentEvent(
@@ -154,6 +155,14 @@ import Testing
         sessionID: "session",
         permission: request
     ))
+
+    let normalized = AgentPermissionRequest(
+        responseToken: String(repeating: "1", count: 32),
+        summary: "Edit",
+        context: "  /tmp/a\n",
+        canAlwaysAllow: false
+    )
+    #expect(normalized.context == "/tmp/a")
 
     #expect(throws: AgentEventValidationError.invalidPermission) {
         try AgentEventValidator.validate(AgentEvent(

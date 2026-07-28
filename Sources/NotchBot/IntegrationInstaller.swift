@@ -163,7 +163,7 @@ final class IntegrationInstaller: ObservableObject {
         guard
             let data = try? boundedData(at: installStatusURL, maximum: 4_096),
             let status = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data),
-            status.version == 6,
+            status.version == 7,
             (try? isCurrentOwnedHelper()) == true,
             (try? isOwnedPlugin(at: openCodePluginURL)) == true
         else {
@@ -361,7 +361,7 @@ final class IntegrationInstaller: ObservableObject {
         if itemExists(at: installStatusURL) {
             let data = try boundedData(at: installStatusURL, maximum: 4_096)
             if let version = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version,
-               version == 2 || version == 3 || version == 4 || version == 5 { return true }
+               version == 2 || version == 3 || version == 4 || version == 5 || version == 6 { return true }
         }
         if itemExists(at: helperOwnershipURL), try isPreviousHelperMarker() { return true }
         return try hasManagedClaudeHooks() && !isCurrentInstallationMarked()
@@ -394,7 +394,7 @@ final class IntegrationInstaller: ObservableObject {
     private func isCurrentInstallationMarked() -> Bool {
         guard
             let data = try? boundedData(at: installStatusURL, maximum: 4_096),
-            (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 6
+            (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 7
         else { return false }
         return true
     }
@@ -490,7 +490,7 @@ final class IntegrationInstaller: ObservableObject {
         guard let version = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version else {
             return false
         }
-        return version == 2 || version == 3 || version == 4 || version == 5 || version == 6
+        return version == 2 || version == 3 || version == 4 || version == 5 || version == 6 || version == 7
     }
 
     private func writeAtomically(_ data: Data, to url: URL, permissions: Int) throws {

@@ -60,13 +60,10 @@ public enum OpenCodePlugin {
           return value.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null
         }
 
-        function permissionSummary(properties) {
-          const action = bounded(properties.permission, 128) ?? bounded(properties.type, 128) ?? bounded(properties.title, 128) ?? "Permission"
-          const patterns = Array.isArray(properties.patterns)
-            ? properties.patterns
-            : Array.isArray(properties.pattern) ? properties.pattern : [properties.pattern]
-          const detail = patterns.filter((value) => typeof value === "string" && value.length > 0).slice(0, 3).join(", ")
-          const normalized = `${action}${detail ? `: ${detail}` : ""}`.replace(/\\s+/g, " ").trim()
+        function permissionText(value) {
+          if (typeof value !== "string") return null
+          const normalized = value.replace(/\\s+/g, " ").trim()
+          if (!normalized) return null
           let result = ""
           for (const character of normalized) {
             if (Array.from(result).length >= 240) break
@@ -74,7 +71,37 @@ public enum OpenCodePlugin {
             if (new TextEncoder().encode(candidate).length > 1024) break
             result = candidate
           }
-          return result || "Permission"
+          return result || null
+        }
+
+        function permissionSummary(properties) {
+          const rawAction = bounded(properties.permission, 128) ?? bounded(properties.type, 128) ?? bounded(properties.title, 128) ?? "Permission"
+          const words = rawAction.replace(/[_-]+/g, " ")
+          const action = words.charAt(0).toUpperCase() + words.slice(1)
+          const patterns = Array.isArray(properties.patterns)
+            ? properties.patterns
+            : Array.isArray(properties.pattern) ? properties.pattern : [properties.pattern]
+          const detail = patterns.filter((value) => typeof value === "string" && value.length > 0).slice(0, 3).join(", ")
+          return permissionText(`${action}${detail ? ` · ${detail}` : ""}`) ?? "Permission"
+        }
+
+        function permissionContext(properties) {
+          const metadata = properties.metadata ?? {}
+          const candidates = [
+            metadata.command,
+            metadata.file_path,
+            metadata.filePath,
+            metadata.path,
+            metadata.url,
+            metadata.query,
+            metadata.description,
+          ]
+          const context = candidates.map(permissionText).find(Boolean) ?? null
+          if (!context) return null
+          const patterns = Array.isArray(properties.patterns)
+            ? properties.patterns
+            : Array.isArray(properties.pattern) ? properties.pattern : [properties.pattern]
+          return patterns.some((pattern) => permissionText(pattern) === context) ? null : context
         }
 
         function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, summary, label) {
@@ -150,6 +177,7 @@ public enum OpenCodePlugin {
               cwd: bounded(directory, 1024),
               task_label: taskLabels.get(sessionID) ?? fallbackTaskLabel,
               permission_summary: permissionSummary(properties),
+              permission_context: permissionContext(properties),
               permission_can_always: true,
             }
             try {

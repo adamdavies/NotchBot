@@ -38,7 +38,8 @@ import Testing
     }
     """.utf8)
     let input = try ClaudePermissionInput.decode(from: data)
-    #expect(input.summary == "Bash: npm test")
+    #expect(input.summary == "Bash")
+    #expect(input.context == "npm test")
     #expect(input.suggestion != nil)
 
     let always = ClaudePermissionOutput.encode(decision: "alwaysAllow", suggestion: input.suggestion)
@@ -51,8 +52,27 @@ import Testing
     let ambiguous = try ClaudePermissionInput.decode(from: Data("""
     {"tool_name":"Edit","tool_input":{"file_path":"/tmp/a"},"permission_suggestions":[{},{}]}
     """.utf8))
+    #expect(ambiguous.summary == "Edit")
+    #expect(ambiguous.context == "/tmp/a")
     #expect(ambiguous.suggestion == nil)
     #expect(ClaudePermissionOutput.encode(decision: "alwaysAllow", suggestion: nil) == nil)
+}
+
+@Test func openCodePermissionContextIsAllowlistedAndBounded() throws {
+    let data = Data("""
+    {
+      "session_id":"session",
+      "permission_summary":"External directory · /tmp/*",
+      "permission_context":"  rm   /tmp/example  ",
+      "permission_can_always":true,
+      "raw_event":{"secret":"ignored"}
+    }
+    """.utf8)
+    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
+
+    #expect(payload?.permissionSummary == "External directory · /tmp/*")
+    #expect(payload?.permissionContext == "rm /tmp/example")
+    #expect(payload?.permissionCanAlways == true)
 }
 
 @Test func declineOutputDoesNotInterruptClaude() throws {

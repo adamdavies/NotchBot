@@ -88,6 +88,7 @@ public enum HookInput {
                 agentID: try validatedIdentifier(decoded.agentID),
                 parentSessionID: try validatedIdentifier(decoded.parentSessionID),
                 permissionSummary: permissionSummary(decoded.permissionSummary),
+                permissionContext: permissionSummary(decoded.permissionContext),
                 permissionCanAlways: decoded.permissionCanAlways ?? false
             )
         }
@@ -104,6 +105,7 @@ public enum HookInput {
             agentID: try validatedIdentifier(decoded.agentID),
             parentSessionID: try validatedIdentifier(decoded.parentSessionID),
             permissionSummary: permissionSummary(decoded.permissionSummary),
+            permissionContext: permissionSummary(decoded.permissionContext),
             permissionCanAlways: decoded.permissionCanAlways ?? false
         )
     }
@@ -183,6 +185,7 @@ public struct HookPayload: Equatable, Sendable {
     public let agentID: String?
     public let parentSessionID: String?
     public let permissionSummary: String?
+    public let permissionContext: String?
     public let permissionCanAlways: Bool
 }
 
@@ -195,6 +198,7 @@ private struct BasicPayload: Decodable {
     let agentID: String?
     let parentSessionID: String?
     let permissionSummary: String?
+    let permissionContext: String?
     let permissionCanAlways: Bool?
 
     enum CodingKeys: String, CodingKey {
@@ -206,6 +210,7 @@ private struct BasicPayload: Decodable {
         case agentID = "agent_id"
         case parentSessionID = "parent_session_id"
         case permissionSummary = "permission_summary"
+        case permissionContext = "permission_context"
         case permissionCanAlways = "permission_can_always"
     }
 }
@@ -220,6 +225,7 @@ private struct ExcerptPayload: Decodable {
     let agentID: String?
     let parentSessionID: String?
     let permissionSummary: String?
+    let permissionContext: String?
     let permissionCanAlways: Bool?
 
     enum CodingKeys: String, CodingKey {
@@ -232,12 +238,14 @@ private struct ExcerptPayload: Decodable {
         case agentID = "agent_id"
         case parentSessionID = "parent_session_id"
         case permissionSummary = "permission_summary"
+        case permissionContext = "permission_context"
         case permissionCanAlways = "permission_can_always"
     }
 }
 
 public struct ClaudePermissionInput: Equatable, Sendable {
     public let summary: String
+    public let context: String?
     public let suggestion: Data?
 
     public static func decode(from input: Data) throws -> Self {
@@ -249,7 +257,7 @@ public struct ClaudePermissionInput: Equatable, Sendable {
         let toolInput = object["tool_input"] as? [String: Any] ?? [:]
         let detailKeys = ["command", "file_path", "path", "notebook_path", "url", "query", "pattern", "description"]
         let detail = detailKeys.lazy.compactMap { normalized(toolInput[$0] as? String, limit: 180) }.first
-        let summary = normalized(detail.map { "\(toolName): \($0)" } ?? toolName, limit: 240) ?? "Tool permission"
+        let summary = normalized(toolName, limit: 240) ?? "Tool permission"
 
         var suggestion: Data?
         if let suggestions = object["permission_suggestions"] as? [Any], suggestions.count == 1,
@@ -258,7 +266,7 @@ public struct ClaudePermissionInput: Equatable, Sendable {
            encoded.count <= 16 * 1_024 {
             suggestion = encoded
         }
-        return Self(summary: summary, suggestion: suggestion)
+        return Self(summary: summary, context: detail, suggestion: suggestion)
     }
 
     private static func normalized(_ value: String?, limit: Int) -> String? {

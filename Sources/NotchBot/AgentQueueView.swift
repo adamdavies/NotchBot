@@ -80,7 +80,8 @@ struct AgentQueueView: View {
     }
 
     private func rowHeight(for session: SessionActivity) -> CGFloat {
-        session.permission == nil ? 57 : 100
+        guard let permission = session.permission else { return 57 }
+        return permission.context == nil ? 106 : 126
     }
 }
 
@@ -124,10 +125,18 @@ private struct AgentQueueRow: View {
 
                 if let permission = session.permission {
                     Text(permission.summary)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
                         .truncationMode(.middle)
+
+                    if let context = permission.context {
+                        Text(context)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
 
                     HStack(spacing: 6) {
                         permissionButton("Allow Once", decision: .allowOnce, permission: permission)
@@ -136,6 +145,7 @@ private struct AgentQueueRow: View {
                         }
                         permissionButton("Decline", decision: .decline, permission: permission, destructive: true)
                     }
+                    .padding(.top, 4)
                 }
             }
 

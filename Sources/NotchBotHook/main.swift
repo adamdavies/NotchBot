@@ -84,12 +84,14 @@ if options.permissionRequest {
             permission = AgentPermissionRequest(
                 responseToken: server.responseToken,
                 summary: decoded.summary,
+                context: decoded.context,
                 canAlwaysAllow: decoded.suggestion != nil
             )
         } else if let nativeSummary = payload?.permissionSummary {
             permission = AgentPermissionRequest(
                 responseToken: server.responseToken,
                 summary: nativeSummary,
+                context: payload?.permissionContext,
                 canAlwaysAllow: payload?.permissionCanAlways ?? false
             )
         }

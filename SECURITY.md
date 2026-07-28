@@ -16,7 +16,7 @@ The OpenCode plugin and Claude Code hooks invoke `~/Library/Application Support/
 
 For an actionable permission, the helper binds a private one-shot `permission-<random-token>.sock` before publishing the event. NotchBot sends an authenticated `allowOnce`, `alwaysAllow`, or `decline` response to the socket derived from that validated token. Responses are single-use in practice because the helper closes and removes the socket after receiving one valid response; tokens and socket paths expire after a bounded four-minute wait. OpenCode retains its native request identifier inside the plugin and maps the response to `once`, `always`, or `reject`. Claude Code retains its native permission suggestion inside the helper. NotchBot offers Claude **Always** only when exactly one suggestion exists, and the helper echoes that suggestion without widening or synthesizing a rule. On timeout, app absence, invalid data, or provider API failure, the native provider permission flow remains available.
 
-Permission summaries contain the native tool or action plus a bounded command, path, URL, query, pattern, or provider pattern when available. They are sanitized, limited to 240 characters and 1 KiB, retained only in process memory, and never written by NotchBot. Unknown raw provider fields are not forwarded. Clicking an actionable row or the compact bot only focuses the terminal. Only an explicit permission button sends a provider response. After a response is sent, the controls disappear but attention remains until a provider lifecycle event reports resumed work.
+Permission rows separate the native permission scope from its command, path, URL, query, pattern, or description context when available. Both fields are sanitized, independently limited to 240 characters and 1 KiB, retained only in process memory, and never written by NotchBot. OpenCode context is selected from an allowlist of native permission metadata fields; Claude context is selected from the existing allowlisted `tool_input` fields. Unknown raw provider fields are not forwarded. Clicking an actionable row or the compact bot only focuses the terminal. Only an explicit permission button sends a provider response. After a response is sent, the controls disappear but attention remains until a provider lifecycle event reports resumed work.
 
 Acknowledged or expired non-permission attention entries remain in memory as Idle until a subsequent lifecycle event resumes work, the session ends, or stale-session cleanup removes them.
 
@@ -26,4 +26,4 @@ The integration uses the helper and its `.notchbot-owner` marker, `integration-p
 
 ## Sandbox Status
 
-NotchBot 0.2.2 is not App Sandbox enabled and requests no signing entitlements. App Sandbox adoption is deferred to v0.3.0.
+NotchBot 0.2.3 is not App Sandbox enabled and requests no signing entitlements. App Sandbox adoption is deferred to v0.3.0.

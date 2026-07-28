@@ -19,11 +19,13 @@ public struct AgentPermissionRequest: Codable, Equatable, Sendable {
 
     public let responseToken: String
     public let summary: String
+    public let context: String?
     public let canAlwaysAllow: Bool
 
-    public init(responseToken: String, summary: String, canAlwaysAllow: Bool) {
+    public init(responseToken: String, summary: String, context: String? = nil, canAlwaysAllow: Bool) {
         self.responseToken = responseToken
         self.summary = summary
+        self.context = Self.normalizedSummary(context)
         self.canAlwaysAllow = canAlwaysAllow
     }
 
@@ -159,7 +161,8 @@ public enum AgentEventValidator {
         if let permission = event.permission {
             guard event.kind == .attention, event.source != .preview,
                   validResponseToken(permission.responseToken),
-                  AgentPermissionRequest.normalizedSummary(permission.summary) == permission.summary else {
+                  AgentPermissionRequest.normalizedSummary(permission.summary) == permission.summary,
+                  AgentPermissionRequest.normalizedSummary(permission.context) == permission.context else {
                 throw AgentEventValidationError.invalidPermission
             }
         }

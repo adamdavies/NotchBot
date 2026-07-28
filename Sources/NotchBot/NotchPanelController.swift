@@ -181,7 +181,8 @@ final class NotchPanelController {
             return NSSize(width: 320, height: 104)
         }
         let height = model.activeSessions.prefix(5).reduce(CGFloat(42)) { result, session in
-            result + (session.permission == nil ? 58 : 101)
+            guard let permission = session.permission else { return result + 58 }
+            return result + (permission.context == nil ? 107 : 127)
         }
         return NSSize(width: 380, height: height)
     }
