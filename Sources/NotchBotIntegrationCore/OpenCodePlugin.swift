@@ -15,6 +15,7 @@ public enum OpenCodePlugin {
         // \(NotchBotIntegrationFiles.generatedMarker). Do not edit.
         const hookPath = \(pathLiteral)
         const taskLabels = new Map()
+        const sessionParents = new Map()
         let sendQueue = Promise.resolve()
         \(excerptStorage)
         function bounded(value, maximum) {
@@ -52,9 +53,10 @@ public enum OpenCodePlugin {
           return value.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null
         }
 
-        function send(kind, sessionID, reason, directory, expiresAfter, summary, label) {
+        function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, summary, label) {
           sessionID = identifier(sessionID)
           if (!sessionID) return
+          parentSessionID = identifier(parentSessionID)
           const args = [hookPath, "--source", "opencode", "--kind", kind]
           if (reason) args.push("--reason", reason)
           if (expiresAfter) args.push("--expires-after", String(expiresAfter))
@@ -62,6 +64,7 @@ public enum OpenCodePlugin {
             session_id: sessionID,
             cwd: bounded(directory, 1024),
           }
+          if (parentSessionID && parentSessionID !== sessionID) payload.parent_session_id = parentSessionID
           if (summary) payload.last_assistant_message = summary
           if (label) payload.task_label = label
           sendQueue = sendQueue.then(async () => {
@@ -76,10 +79,26 @@ public enum OpenCodePlugin {
           })
         }
 
-        export const NotchBot = async ({ directory, worktree, project }) => {
+        export const NotchBot = async ({ client, directory, worktree, project }) => {
           const fallbackTaskLabel = taskLabel(project?.name) ?? taskLabel(basename(worktree)) ?? taskLabel(basename(directory)) ?? "OpenCode"
           const sendEvent = (kind, sessionID, reason, expiresAfter, summary) =>
-            send(kind, sessionID, reason, directory, expiresAfter, summary, taskLabels.get(sessionID) ?? fallbackTaskLabel)
+            send(kind, sessionID, sessionParents.get(sessionID), reason, directory, expiresAfter, summary, taskLabels.get(sessionID) ?? fallbackTaskLabel)
+          const resolveParentSessionID = async (sessionID, info) => {
+            const direct = identifier(info?.parentID)
+            if (direct && direct !== sessionID) {
+              setBounded(sessionParents, sessionID, direct)
+              return direct
+            }
+            if (sessionParents.has(sessionID)) return sessionParents.get(sessionID)
+            try {
+              const response = await client.session.get({ path: { id: sessionID } })
+              const parentSessionID = identifier(response?.data?.parentID ?? response?.parentID)
+              setBounded(sessionParents, sessionID, parentSessionID && parentSessionID !== sessionID ? parentSessionID : null)
+            } catch (_) {
+              // Session metadata can be unavailable during shutdown; lifecycle handling still continues.
+            }
+            return sessionParents.get(sessionID) ?? null
+          }
           return {
           event: async ({ event }) => {
             const properties = event.properties ?? {}
@@ -88,12 +107,15 @@ public enum OpenCodePlugin {
             if (!sessionID) return
 
             if (event.type === "session.created" || event.type === "session.updated") {
+              const parentSessionID = identifier(properties.info?.parentID)
+              setBounded(sessionParents, sessionID, parentSessionID && parentSessionID !== sessionID ? parentSessionID : null)
               const label = taskLabel(properties.info?.title)
               if (label) {
                 setBounded(taskLabels, sessionID, label)
-                send("metadata", sessionID, null, directory, null, null, label)
               }
+              send("metadata", sessionID, parentSessionID, null, directory, null, null, label)
             }
+            if (!sessionParents.has(sessionID)) await resolveParentSessionID(sessionID, properties.info)
 
             switch (event.type) {
               case "session.status":
@@ -101,12 +123,14 @@ public enum OpenCodePlugin {
                   sendEvent("working", sessionID, null, null, null)
                 } else if (properties.status?.type === "idle") {
                   \(attentionSummary)
-                  sendEvent("attention", sessionID, "OpenCode finished working", 2.5, summary)
+                  if (await resolveParentSessionID(sessionID, properties.info)) sendEvent("cleared", sessionID, null, null, summary)
+                  else sendEvent("attention", sessionID, "OpenCode finished working", 2.5, summary)
                 }
                 break
               case "session.idle": {
                 \(attentionSummary)
-                sendEvent("attention", sessionID, "OpenCode finished working", 2.5, summary)
+                if (await resolveParentSessionID(sessionID, properties.info)) sendEvent("cleared", sessionID, null, null, summary)
+                else sendEvent("attention", sessionID, "OpenCode finished working", 2.5, summary)
                 break
               }
               case "permission.asked":
@@ -130,11 +154,13 @@ public enum OpenCodePlugin {
                 break
               case "session.deleted":
                 sendEvent("cleared", sessionID, null, null, null)
-                taskLabels.delete(sessionID)\(deletionCleanup)
+                taskLabels.delete(sessionID)
+                sessionParents.delete(sessionID)\(deletionCleanup)
                 break
             }
           },
           "tool.execute.before": async (input) => {
+            if (!sessionParents.has(input.sessionID)) await resolveParentSessionID(input.sessionID)
             sendEvent("working", input.sessionID, null, null, null)
           },
           }
@@ -146,8 +172,8 @@ public enum OpenCodePlugin {
         hasGeneratedHeader(NotchBotIntegrationFiles.generatedMarker, in: contents)
     }
 
-    public static func isPreviousV020(_ contents: String) -> Bool {
-        hasGeneratedHeader(NotchBotIntegrationFiles.previousGeneratedMarker, in: contents)
+    public static func isPreviousVersion(_ contents: String) -> Bool {
+        NotchBotIntegrationFiles.previousGeneratedMarkers.contains { hasGeneratedHeader($0, in: contents) }
             && contents.contains("function send(kind, sessionID")
             && contents.contains("Bun.spawn(args")
             && contents.contains("case \"session.status\"")

@@ -77,9 +77,10 @@ public enum HookInput {
                 cwd: bounded(decoded.cwd, bytes: 1_024),
                 lastAssistantMessage: bounded(decoded.lastAssistantMessage, bytes: 1_024),
                 sessionTitle: boundedLabel(decoded.sessionTitle),
-                taskSubject: boundedLabel(decoded.taskSubject),
                 agentType: boundedLabel(decoded.agentType),
-                taskLabel: boundedLabel(decoded.taskLabel)
+                taskLabel: boundedLabel(decoded.taskLabel),
+                agentID: try validatedIdentifier(decoded.agentID),
+                parentSessionID: try validatedIdentifier(decoded.parentSessionID)
             )
         }
         guard let decoded = try? JSONDecoder().decode(BasicPayload.self, from: input) else {
@@ -90,9 +91,10 @@ public enum HookInput {
             cwd: bounded(decoded.cwd, bytes: 1_024),
             lastAssistantMessage: nil,
             sessionTitle: boundedLabel(decoded.sessionTitle),
-            taskSubject: boundedLabel(decoded.taskSubject),
             agentType: boundedLabel(decoded.agentType),
-            taskLabel: boundedLabel(decoded.taskLabel)
+            taskLabel: boundedLabel(decoded.taskLabel),
+            agentID: try validatedIdentifier(decoded.agentID),
+            parentSessionID: try validatedIdentifier(decoded.parentSessionID)
         )
     }
 
@@ -102,9 +104,13 @@ public enum HookInput {
             return name.isEmpty ? nil : name
         }
         let candidate = source == "claude"
-            ? (payload?.sessionTitle ?? payload?.taskSubject ?? payload?.agentType ?? directoryName ?? "Claude Code")
+            ? (payload?.sessionTitle ?? payload?.agentType ?? directoryName ?? "Claude Code")
             : (payload?.taskLabel ?? directoryName ?? "OpenCode")
         return normalizedLabel(candidate)
+    }
+
+    public static func subagentLabel(from payload: HookPayload?) -> String {
+        normalizedLabel(payload?.agentType) ?? "Subagent"
     }
 
     private static func bounded(_ value: String?, bytes maximum: Int) -> String? {
@@ -145,26 +151,29 @@ public struct HookPayload: Equatable, Sendable {
     public let cwd: String?
     public let lastAssistantMessage: String?
     public let sessionTitle: String?
-    public let taskSubject: String?
     public let agentType: String?
     public let taskLabel: String?
+    public let agentID: String?
+    public let parentSessionID: String?
 }
 
 private struct BasicPayload: Decodable {
     let sessionID: String?
     let cwd: String?
     let sessionTitle: String?
-    let taskSubject: String?
     let agentType: String?
     let taskLabel: String?
+    let agentID: String?
+    let parentSessionID: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
         case cwd
         case sessionTitle = "session_title"
-        case taskSubject = "task_subject"
         case agentType = "agent_type"
         case taskLabel = "task_label"
+        case agentID = "agent_id"
+        case parentSessionID = "parent_session_id"
     }
 }
 
@@ -173,17 +182,19 @@ private struct ExcerptPayload: Decodable {
     let cwd: String?
     let lastAssistantMessage: String?
     let sessionTitle: String?
-    let taskSubject: String?
     let agentType: String?
     let taskLabel: String?
+    let agentID: String?
+    let parentSessionID: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
         case cwd
         case lastAssistantMessage = "last_assistant_message"
         case sessionTitle = "session_title"
-        case taskSubject = "task_subject"
         case agentType = "agent_type"
         case taskLabel = "task_label"
+        case agentID = "agent_id"
+        case parentSessionID = "parent_session_id"
     }
 }

@@ -306,3 +306,229 @@ import Testing
     reducer.removeSessions(olderThan: start.addingTimeInterval(Double(ActivityReducer.maximumSessions + 2)))
     #expect(reducer.pendingMetadataCount == 1)
 }
+
+@Test func hierarchyKeepsParentBeforeAttentionChildWhileChildDrivesAttention() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "parent",
+        timestamp: start,
+        taskLabel: "Main task"
+    ))
+    let childAttention = reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .attention,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(1),
+        reason: "Needs permission",
+        taskLabel: "Explore"
+    ))
+
+    #expect(reducer.activities.map(\.sessionID) == ["parent", "child"])
+    #expect(reducer.activities[1].isSubagent)
+    #expect(reducer.primarySession?.sessionID == "child")
+    #expect(childAttention.state == .attention)
+    #expect(childAttention.shouldNotify)
+    #expect(reducer.activeCount == 2)
+}
+
+@Test func clearingSubagentRemovesOnlyItsSubtreeWithoutAttention() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "parent", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(1)
+    ))
+
+    let change = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .cleared,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(2)
+    ))
+
+    #expect(reducer.activities.map(\.sessionID) == ["parent"])
+    #expect(change.state == .working)
+    #expect(!change.shouldNotify)
+    #expect(reducer.attentionCount == 0)
+}
+
+@Test func clearingParentRemovesAllDescendantsAndRejectsOlderChildEvents() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "parent", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(1)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "grandchild",
+        parentSessionID: "child",
+        timestamp: start.addingTimeInterval(2)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .cleared,
+        sessionID: "parent",
+        timestamp: start.addingTimeInterval(4)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(3)
+    ))
+
+    #expect(reducer.sessionCount == 0)
+    #expect(reducer.state == .idle)
+}
+
+@Test func orphanSubagentRejoinsParentAndCyclesAreDropped() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start
+    ))
+    #expect(reducer.activities.map(\.sessionID) == ["child"])
+
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "parent",
+        parentSessionID: "child",
+        timestamp: start.addingTimeInterval(1)
+    ))
+
+    #expect(reducer.activities.map(\.sessionID) == ["parent", "child"])
+    #expect(reducer.activities[0].parentSessionID == nil)
+    #expect(reducer.activities[1].parentSessionID == "parent")
+}
+
+@Test func parentClearRejectsDelayedPreviouslyUnseenSubagent() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "parent", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .cleared,
+        sessionID: "parent",
+        timestamp: start.addingTimeInterval(10)
+    ))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "late-child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(5)
+    ))
+
+    #expect(reducer.sessionCount == 0)
+}
+
+@Test func freshSubagentKeepsStaleParentGroupAlive() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "parent", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(100)
+    ))
+
+    reducer.removeSessions(olderThan: start.addingTimeInterval(50))
+
+    #expect(reducer.activities.map(\.sessionID) == ["parent", "child"])
+}
+
+@Test func delayedMetadataCannotReparentNewerLifecycleState() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "child",
+        timestamp: start.addingTimeInterval(10)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .metadata,
+        sessionID: "child",
+        parentSessionID: "old-parent",
+        timestamp: start.addingTimeInterval(5),
+        taskLabel: "Updated label"
+    ))
+
+    #expect(reducer.primarySession?.parentSessionID == nil)
+    #expect(reducer.primarySession?.taskLabel == "Updated label")
+}
+
+@Test func parentClearRemovesPendingChildMetadata() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start,
+        taskLabel: "Explore"
+    ))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .cleared,
+        sessionID: "parent",
+        timestamp: start.addingTimeInterval(1)
+    ))
+
+    #expect(reducer.pendingMetadataCount == 0)
+}
+
+@Test func rejectedIntermediateSubagentClearsPreviouslyArrivedDescendants() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "root", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .cleared,
+        sessionID: "root",
+        timestamp: start.addingTimeInterval(10)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "grandchild",
+        parentSessionID: "child",
+        timestamp: start.addingTimeInterval(4)
+    ))
+    #expect(reducer.sessionCount == 1)
+
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "root",
+        timestamp: start.addingTimeInterval(5)
+    ))
+
+    #expect(reducer.sessionCount == 0)
+}

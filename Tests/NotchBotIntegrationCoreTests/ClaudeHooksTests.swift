@@ -41,7 +41,7 @@ import Testing
     #expect(remainingHooks["Stop"] == nil)
 }
 
-@Test func mergeAddsMetadataHooksAndMigratesPreviousHookSet() {
+@Test func mergeAddsSubagentHooksAndMigratesPreviousHookSet() {
     let path = "/tmp/notchbot-hook"
     let previous: [String: Any] = [
         "hooks": [
@@ -49,6 +49,12 @@ import Testing
                 "hooks": [[
                     "type": "command", "command": path,
                     "args": ["--source", "claude", "--kind", "working"], "timeout": 5,
+                ]],
+            ]],
+            "TaskCreated": [[
+                "hooks": [[
+                    "type": "command", "command": path,
+                    "args": ["--source", "claude", "--kind", "metadata"], "timeout": 5,
                 ]],
             ]],
             "Custom": [[
@@ -63,7 +69,9 @@ import Testing
     let merged = ClaudeHooks.merging(into: previous, hookPath: path)
     let hooks = merged["hooks"] as! [String: Any]
     #expect((hooks["SessionStart"] as? [[String: Any]])?.count == 1)
-    #expect((hooks["TaskCreated"] as? [[String: Any]])?.count == 1)
+    #expect((hooks["SubagentStart"] as? [[String: Any]])?.count == 1)
+    #expect((hooks["SubagentStop"] as? [[String: Any]])?.count == 1)
+    #expect(hooks["TaskCreated"] == nil)
     #expect((hooks["UserPromptSubmit"] as? [[String: Any]])?.count == 1)
     #expect((hooks["Custom"] as? [[String: Any]])?.count == 1)
 }

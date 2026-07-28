@@ -36,7 +36,7 @@ struct AgentQueueView: View {
                         if index < model.activeSessions.count - 1 {
                             Divider()
                                 .overlay(.white.opacity(0.06))
-                                .padding(.leading, 36)
+                                .padding(.leading, model.activeSessions[index + 1].isSubagent ? 54 : 36)
                         }
                     }
                 }
@@ -81,6 +81,13 @@ private struct AgentQueueRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            if session.isSubagent {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .frame(width: 10)
+            }
+
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)

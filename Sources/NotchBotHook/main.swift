@@ -47,21 +47,34 @@ do {
 let environment = ProcessInfo.processInfo.environment
 let source = AgentSource(rawValue: options.source)!
 let kind = AgentEventKind(rawValue: options.kind)!
-let sessionID = payload?.sessionID
+let isClaudeSubagent = source == .claude && payload?.agentID != nil
+let sessionID = (isClaudeSubagent ? payload?.agentID : payload?.sessionID)
     ?? bounded(environment["CLAUDE_SESSION_ID"], bytes: 128)
     ?? "\(source.rawValue)-\(getppid())"
+let parentSessionID: String? = if isClaudeSubagent {
+    payload?.sessionID
+} else if source == .opencode {
+    payload?.parentSessionID
+} else {
+    nil
+}
 let cwd = payload?.cwd ?? bounded(environment["PWD"], bytes: 1_024)
 let summary = policy.assistantExcerptsEnabled
     ? AgentSummaryText.excerpt(from: payload?.lastAssistantMessage ?? "")
     : nil
-let taskLabel = source == .claude && kind != .metadata
-    ? nil
-    : HookInput.taskLabel(from: payload, source: options.source)
+let taskLabel: String? = if isClaudeSubagent {
+    HookInput.subagentLabel(from: payload)
+} else if source == .claude && kind != .metadata {
+    nil
+} else {
+    HookInput.taskLabel(from: payload, source: options.source)
+}
 
 let event = AgentEvent(
     source: source,
     kind: kind,
     sessionID: sessionID,
+    parentSessionID: parentSessionID,
     workingDirectory: cwd,
     terminalBundleIdentifier: terminalBundleIdentifier(environment: environment),
     terminalProcessID: nil,

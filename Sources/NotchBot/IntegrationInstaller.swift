@@ -163,7 +163,7 @@ final class IntegrationInstaller: ObservableObject {
         guard
             let data = try? boundedData(at: installStatusURL, maximum: 4_096),
             let status = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data),
-            status.version == 3,
+            status.version == 4,
             (try? isCurrentOwnedHelper()) == true,
             (try? isOwnedPlugin(at: openCodePluginURL)) == true
         else {
@@ -360,7 +360,8 @@ final class IntegrationInstaller: ObservableObject {
         }
         if itemExists(at: installStatusURL) {
             let data = try boundedData(at: installStatusURL, maximum: 4_096)
-            if (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 2 { return true }
+            if let version = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version,
+               version == 2 || version == 3 { return true }
         }
         if itemExists(at: helperOwnershipURL), try isPreviousHelperMarker() { return true }
         return try hasManagedClaudeHooks() && !isCurrentInstallationMarked()
@@ -393,7 +394,7 @@ final class IntegrationInstaller: ObservableObject {
     private func isCurrentInstallationMarked() -> Bool {
         guard
             let data = try? boundedData(at: installStatusURL, maximum: 4_096),
-            (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 3
+            (try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version) == 4
         else { return false }
         return true
     }
@@ -444,7 +445,7 @@ final class IntegrationInstaller: ObservableObject {
 
     private func isPreviousPlugin(at url: URL) throws -> Bool {
         guard itemExists(at: url), try regularFile(at: url) else { return false }
-        return OpenCodePlugin.isPreviousV020(try boundedString(at: url, maximum: 128 * 1_024))
+        return OpenCodePlugin.isPreviousVersion(try boundedString(at: url, maximum: 128 * 1_024))
     }
 
     private func isOwnedHelper() throws -> Bool {
@@ -469,15 +470,16 @@ final class IntegrationInstaller: ObservableObject {
         }
         let marker = try boundedString(at: helperOwnershipURL, maximum: 128)
         return marker == NotchBotIntegrationFiles.helperOwnershipMarker
-            || marker == NotchBotIntegrationFiles.previousHelperOwnershipMarker
+            || NotchBotIntegrationFiles.previousHelperOwnershipMarkers.contains(marker)
     }
 
     private func isPreviousHelperMarker() throws -> Bool {
         guard itemExists(at: helperOwnershipURL), try regularFile(at: helperOwnershipURL) else {
             return false
         }
-        return try boundedString(at: helperOwnershipURL, maximum: 128)
-            == NotchBotIntegrationFiles.previousHelperOwnershipMarker
+        return NotchBotIntegrationFiles.previousHelperOwnershipMarkers.contains(
+            try boundedString(at: helperOwnershipURL, maximum: 128)
+        )
     }
 
     private func isOwnedInstallStatus() throws -> Bool {
@@ -488,7 +490,7 @@ final class IntegrationInstaller: ObservableObject {
         guard let version = try? JSONDecoder().decode(IntegrationInstallStatus.self, from: data).version else {
             return false
         }
-        return version == 2 || version == 3
+        return version == 2 || version == 3 || version == 4
     }
 
     private func writeAtomically(_ data: Data, to url: URL, permissions: Int) throws {

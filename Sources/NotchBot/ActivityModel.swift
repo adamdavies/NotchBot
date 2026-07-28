@@ -60,7 +60,12 @@ final class ActivityModel: ObservableObject {
     }
 
     func receive(_ event: AgentEvent) {
-        guard (try? AgentEventValidator.validate(event)) != nil, reducer.canApply(event) else { return }
+        guard (try? AgentEventValidator.validate(event)) != nil else { return }
+        if let rejection = reducer.rejectDescendantOfClearedSession(event) {
+            publish(rejection)
+            return
+        }
+        guard reducer.canApply(event) else { return }
         let sessionKey = key(for: event)
         if event.kind != .metadata {
             expiryTasks.removeValue(forKey: sessionKey)?.cancel()
@@ -230,6 +235,7 @@ final class ActivityModel: ObservableObject {
 
     private func performMaintenance(now: Date = Date()) {
         reducer.removeSessions(olderThan: now.addingTimeInterval(-30 * 60))
+        cancelOrphanedExpiryTasks()
         latestSummary = summaryStore.removeLatest(olderThan: now.addingTimeInterval(-15 * 60))
         robotState = reducer.state
         primarySession = reducer.primarySession
@@ -239,6 +245,7 @@ final class ActivityModel: ObservableObject {
     }
 
     private func publish(_ change: ActivityChange) {
+        cancelOrphanedExpiryTasks()
         robotState = change.state
         primarySession = change.primarySession
         activeAgentCount = reducer.activeCount
@@ -248,5 +255,12 @@ final class ActivityModel: ObservableObject {
 
     private func key(for event: AgentEvent) -> String {
         "\(event.source.rawValue):\(event.sessionID)"
+    }
+
+    private func cancelOrphanedExpiryTasks() {
+        let sessionIDs = Set(reducer.activities.map(\.id))
+        for key in expiryTasks.keys where !sessionIDs.contains(key) {
+            expiryTasks.removeValue(forKey: key)?.cancel()
+        }
     }
 }

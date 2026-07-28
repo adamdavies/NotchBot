@@ -44,6 +44,28 @@ import Testing
     }
 }
 
+@Test func eventValidationRejectsInvalidParentRelationships() {
+    let selfParent = AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "same",
+        parentSessionID: "same"
+    )
+    #expect(throws: AgentEventValidationError.invalidParentSessionID) {
+        try AgentEventValidator.validate(selfParent)
+    }
+
+    let controlCharacter = AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "bad\nparent"
+    )
+    #expect(throws: AgentEventValidationError.invalidParentSessionID) {
+        try AgentEventValidator.validate(controlCharacter)
+    }
+}
+
 @Test func eventValidationRejectsTimestampSkewAndInvalidExpiry() {
     let now = Date()
     let stale = AgentEvent(

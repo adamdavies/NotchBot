@@ -53,7 +53,7 @@ import Testing
     }
 }
 
-@Test func taskMetadataIsAllowlistedAndUsesClaudePrecedence() throws {
+@Test func sessionMetadataIsAllowlistedAndUsesClaudePrecedence() throws {
     let data = Data("""
     {
       "session_id":"session",
@@ -70,7 +70,6 @@ import Testing
     let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
 
     #expect(payload?.sessionTitle == "Session title")
-    #expect(payload?.taskSubject == "Task subject")
     #expect(payload?.agentType == "Explore")
     #expect(HookInput.taskLabel(from: payload, source: "claude") == "Session title")
     #expect(HookInput.taskLabel(from: payload, source: "opencode") == "OpenCode title")
@@ -86,4 +85,21 @@ import Testing
     #expect(HookInput.taskLabel(from: nil, source: "claude") == "Claude Code")
     #expect(HookInput.taskLabel(from: nil, source: "opencode") == "OpenCode")
     #expect(HookInput.taskLabel(from: payload, source: "claude") != payload?.lastAssistantMessage)
+}
+
+@Test func subagentIdentifiersAreAllowlistedAndValidated() throws {
+    let data = Data("""
+    {"session_id":"parent","agent_id":"child","parent_session_id":"root","agent_type":"Explore","task_id":"ignored"}
+    """.utf8)
+    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
+
+    #expect(payload?.sessionID == "parent")
+    #expect(payload?.agentID == "child")
+    #expect(payload?.parentSessionID == "root")
+    #expect(HookInput.subagentLabel(from: payload) == "Explore")
+
+    let invalid = Data("{\"agent_id\":\"bad\\nidentifier\"}".utf8)
+    #expect(throws: HookInputError.invalidJSON) {
+        try HookInput.decodePayload(from: invalid, assistantExcerptsEnabled: false)
+    }
 }

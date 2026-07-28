@@ -20,6 +20,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
     public let source: AgentSource
     public let kind: AgentEventKind
     public let sessionID: String
+    public let parentSessionID: String?
     public let timestamp: Date
     public let workingDirectory: String?
     public let terminalBundleIdentifier: String?
@@ -33,6 +34,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         source: AgentSource,
         kind: AgentEventKind,
         sessionID: String,
+        parentSessionID: String? = nil,
         timestamp: Date = Date(),
         workingDirectory: String? = nil,
         terminalBundleIdentifier: String? = nil,
@@ -46,6 +48,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.source = source
         self.kind = kind
         self.sessionID = sessionID
+        self.parentSessionID = parentSessionID
         self.timestamp = timestamp
         self.workingDirectory = workingDirectory
         self.terminalBundleIdentifier = terminalBundleIdentifier
@@ -62,6 +65,7 @@ public enum AgentEventValidationError: Error, Equatable, Sendable {
     case unsupportedVersion
     case previewSourceNotAllowed
     case invalidSessionID
+    case invalidParentSessionID
     case stringTooLong(String)
     case invalidTimestamp
     case invalidExpiry
@@ -87,8 +91,12 @@ public enum AgentEventValidator {
         guard allowPreview || event.source != .preview else {
             throw AgentEventValidationError.previewSourceNotAllowed
         }
-        guard !event.sessionID.isEmpty, event.sessionID.utf8.count <= 128 else {
+        guard validIdentifier(event.sessionID) else {
             throw AgentEventValidationError.invalidSessionID
+        }
+        if let parentSessionID = event.parentSessionID,
+           !validIdentifier(parentSessionID) || parentSessionID == event.sessionID {
+            throw AgentEventValidationError.invalidParentSessionID
         }
         try check(event.workingDirectory, name: "workingDirectory", maximumBytes: 1_024)
         try check(event.terminalBundleIdentifier, name: "terminalBundleIdentifier", maximumBytes: 255)
@@ -122,6 +130,11 @@ public enum AgentEventValidator {
         guard !value.unicodeScalars.contains(where: { $0.value == 0 }) else {
             throw AgentEventValidationError.stringTooLong(name)
         }
+    }
+
+    private static func validIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 128
+            && !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
     }
 }
 

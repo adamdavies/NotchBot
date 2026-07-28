@@ -20,7 +20,8 @@ public enum ClaudeHooks {
 
         append(event: "UserPromptSubmit", kind: "working", reason: nil, matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
         append(event: "SessionStart", kind: "metadata", reason: nil, matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
-        append(event: "TaskCreated", kind: "metadata", reason: nil, matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
+        append(event: "SubagentStart", kind: "working", reason: nil, matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
+        append(event: "SubagentStop", kind: "cleared", reason: nil, matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
         append(event: "PreToolUse", kind: "working", reason: nil, matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
         append(event: "PermissionRequest", kind: "attention", reason: "Claude Code needs permission", matcher: nil, expiry: nil, hookPath: hookPath, hooks: &hooks)
         append(event: "Notification", kind: "attention", reason: "Claude Code needs permission", matcher: "permission_prompt|agent_needs_input", expiry: nil, hookPath: hookPath, hooks: &hooks)
@@ -78,6 +79,9 @@ public enum ClaudeHooks {
         Set([
             HookSignature(event: "UserPromptSubmit", matcher: nil, arguments: workingArguments),
             HookSignature(event: "SessionStart", matcher: nil, arguments: metadataArguments),
+            HookSignature(event: "SubagentStart", matcher: nil, arguments: workingArguments),
+            HookSignature(event: "SubagentStop", matcher: nil, arguments: clearedArguments),
+            // Recognize and remove the v0.2.1 task metadata hook during migration.
             HookSignature(event: "TaskCreated", matcher: nil, arguments: metadataArguments),
             HookSignature(event: "PreToolUse", matcher: nil, arguments: workingArguments),
             HookSignature(event: "PermissionRequest", matcher: nil, arguments: permissionArguments),
