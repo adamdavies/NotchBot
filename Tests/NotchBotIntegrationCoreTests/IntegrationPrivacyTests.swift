@@ -43,5 +43,8 @@ import Testing
     #expect(OpenCodePlugin.isPreviousVersion(previousV021))
     let previousV022 = previous.replacingOccurrences(of: "v0.2.", with: "v0.2.2.")
     #expect(OpenCodePlugin.isPreviousVersion(previousV022))
-    #expect(IntegrationInstallStatus().version == 7)
+    let previousV023 = previous.replacingOccurrences(of: "v0.2.", with: "v0.2.3.")
+    #expect(OpenCodePlugin.isPreviousVersion(previousV023))
+    #expect(IntegrationInstallStatus.currentVersion == 11)
+    #expect(IntegrationInstallStatus().version == IntegrationInstallStatus.currentVersion)
 }

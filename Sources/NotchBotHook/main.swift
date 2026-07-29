@@ -24,7 +24,7 @@ do {
     options = try HookInput.parse(arguments: Array(CommandLine.arguments.dropFirst()))
 } catch {
     FileHandle.standardError.write(Data(
-        "usage: notchbot-hook --source <claude|opencode> --kind <working|attention|cleared|metadata> [--reason text] [--expires-after seconds] [--mode permission]\n".utf8
+        "usage: notchbot-hook --source <claude|opencode> --kind <working|attention|cleared|metadata|request_resolved> [--reason text] [--expires-after seconds] [--mode permission]\n".utf8
     ))
     exit(64)
 }
@@ -68,6 +68,14 @@ let taskLabel: String? = if isClaudeSubagent {
     nil
 } else {
     HookInput.taskLabel(from: payload, source: options.source)
+}
+let request: AgentRequestUpdate? = if source == .opencode,
+    let requestID = payload?.requestID,
+    let requestKind = payload?.requestKind.flatMap(AgentRequestKind.init(rawValue:)),
+    let requestState = payload?.requestState.flatMap(AgentRequestState.init(rawValue:)) {
+    AgentRequestUpdate(id: requestID, kind: requestKind, state: requestState)
+} else {
+    nil
 }
 
 var permissionServer: PermissionResponseServer?
@@ -117,7 +125,8 @@ let event = AgentEvent(
     expiresAfter: options.expiresAfter,
     summary: summary,
     taskLabel: taskLabel,
-    permission: permission
+    permission: permission,
+    request: request
 )
 
 do {

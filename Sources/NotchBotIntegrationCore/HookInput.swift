@@ -39,7 +39,7 @@ public enum HookInput {
             let source = values["--source"],
             ["claude", "opencode"].contains(source),
             let kind = values["--kind"],
-            ["working", "attention", "cleared", "metadata"].contains(kind),
+            ["working", "attention", "cleared", "metadata", "request_resolved"].contains(kind),
             values["--reason"].map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true
         else {
             throw HookInputError.invalidArguments
@@ -89,7 +89,10 @@ public enum HookInput {
                 parentSessionID: try validatedIdentifier(decoded.parentSessionID),
                 permissionSummary: permissionSummary(decoded.permissionSummary),
                 permissionContext: permissionSummary(decoded.permissionContext),
-                permissionCanAlways: decoded.permissionCanAlways ?? false
+                permissionCanAlways: decoded.permissionCanAlways ?? false,
+                requestID: try validatedIdentifier(decoded.requestID),
+                requestKind: decoded.requestKind,
+                requestState: decoded.requestState
             )
         }
         guard let decoded = try? JSONDecoder().decode(BasicPayload.self, from: input) else {
@@ -106,7 +109,10 @@ public enum HookInput {
             parentSessionID: try validatedIdentifier(decoded.parentSessionID),
             permissionSummary: permissionSummary(decoded.permissionSummary),
             permissionContext: permissionSummary(decoded.permissionContext),
-            permissionCanAlways: decoded.permissionCanAlways ?? false
+            permissionCanAlways: decoded.permissionCanAlways ?? false,
+            requestID: try validatedIdentifier(decoded.requestID),
+            requestKind: decoded.requestKind,
+            requestState: decoded.requestState
         )
     }
 
@@ -187,6 +193,9 @@ public struct HookPayload: Equatable, Sendable {
     public let permissionSummary: String?
     public let permissionContext: String?
     public let permissionCanAlways: Bool
+    public let requestID: String?
+    public let requestKind: String?
+    public let requestState: String?
 }
 
 private struct BasicPayload: Decodable {
@@ -200,6 +209,9 @@ private struct BasicPayload: Decodable {
     let permissionSummary: String?
     let permissionContext: String?
     let permissionCanAlways: Bool?
+    let requestID: String?
+    let requestKind: String?
+    let requestState: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -212,6 +224,9 @@ private struct BasicPayload: Decodable {
         case permissionSummary = "permission_summary"
         case permissionContext = "permission_context"
         case permissionCanAlways = "permission_can_always"
+        case requestID = "request_id"
+        case requestKind = "request_kind"
+        case requestState = "request_state"
     }
 }
 
@@ -227,6 +242,9 @@ private struct ExcerptPayload: Decodable {
     let permissionSummary: String?
     let permissionContext: String?
     let permissionCanAlways: Bool?
+    let requestID: String?
+    let requestKind: String?
+    let requestState: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -240,6 +258,9 @@ private struct ExcerptPayload: Decodable {
         case permissionSummary = "permission_summary"
         case permissionContext = "permission_context"
         case permissionCanAlways = "permission_can_always"
+        case requestID = "request_id"
+        case requestKind = "request_kind"
+        case requestState = "request_state"
     }
 }
 

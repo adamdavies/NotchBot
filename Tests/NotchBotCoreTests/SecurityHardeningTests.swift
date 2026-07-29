@@ -186,6 +186,39 @@ import Testing
     }
 }
 
+@Test func requestLifecycleMetadataIsStrictlyValidated() throws {
+    let opened = AgentRequestUpdate(id: "per-request", kind: .permission, state: .opened)
+    try AgentEventValidator.validate(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        request: opened
+    ))
+    try AgentEventValidator.validate(AgentEvent(
+        source: .opencode,
+        kind: .requestResolved,
+        sessionID: "session",
+        request: AgentRequestUpdate(id: "per-request", kind: .permission, state: .resolved)
+    ))
+
+    #expect(throws: AgentEventValidationError.invalidRequest) {
+        try AgentEventValidator.validate(AgentEvent(
+            source: .opencode,
+            kind: .working,
+            sessionID: "session",
+            request: opened
+        ))
+    }
+    #expect(throws: AgentEventValidationError.invalidRequest) {
+        try AgentEventValidator.validate(AgentEvent(
+            source: .claude,
+            kind: .attention,
+            sessionID: "session",
+            request: opened
+        ))
+    }
+}
+
 @Test func replayProtectionIsBoundedAndRejectsDuplicates() {
     var replay = ReplayProtection(capacity: 2)
     let first = replay.accept(Data([1]))

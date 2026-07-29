@@ -35,6 +35,18 @@ import Testing
     #expect(plugin.contains("const hookPath = \"/tmp/a\\\"b\\\\c\""))
 }
 
+@Test func requestRepliesResolveOnlyTheirExactRequest() throws {
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", assistantExcerptsEnabled: false)
+    let resolution = try #require(plugin.range(of: "event.type === \"permission.replied\""))
+    let parentLookup = try #require(plugin.range(of: "if (!sessionParents.has(sessionID))"))
+
+    #expect(resolution.lowerBound < parentLookup.lowerBound)
+    #expect(plugin.contains("resolveRequest(sessionID, \"permission\", nativeRequestID(properties))"))
+    #expect(plugin.contains("resolveRequest(sessionID, \"question\", nativeRequestID(properties))"))
+    #expect(plugin.contains("knownRequests.delete(key)"))
+    #expect(plugin.contains("\"request_resolved\""))
+}
+
 @Test func pluginCachesOnlyExplicitSessionTitlesAndUsesMetadataFallbacks() {
     let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", assistantExcerptsEnabled: false)
 
@@ -54,8 +66,8 @@ import Testing
     #expect(plugin.contains("client.session.get({ path: { id: sessionID } })"))
     #expect(plugin.contains("if (!sessionParents.has(input.sessionID)) await resolveParentSessionID(input.sessionID)"))
     #expect(plugin.contains("const completedSessions = new Set()"))
-    #expect(plugin.contains("const waitingSessions = new Set()"))
-    #expect(plugin.contains("if (waitingSessions.has(sessionID)) return"))
+    #expect(plugin.contains("const knownRequests = new Map()"))
+    #expect(!plugin.contains("waitingSessions"))
     #expect(plugin.contains("if (!completedSessions.has(sessionID))"))
     #expect(plugin.contains("sendEvent(\"attention\", sessionID, \"OpenCode finished working\", null, summary)"))
     #expect(plugin.contains("sendCompletion(sessionID, summary)"))
@@ -63,7 +75,23 @@ import Testing
     #expect(plugin.contains("sessionParents.delete(sessionID)"))
     #expect(plugin.contains("sendEvent(\"attention\", sessionID, \"OpenCode needs permission\""))
     #expect(plugin.contains("case \"permission.updated\":"))
-    #expect(plugin.contains("void requestPermission(sessionID, properties)"))
+    #expect(plugin.contains("void requestPermission(sessionID, properties, requestID, key)"))
+    #expect(plugin.contains("const activePermissionRequests = new Map()"))
+    #expect(plugin.contains("if (activePermissionRequests.has(key)) return"))
+    #expect(plugin.contains("activePermissionRequests.size >= 32"))
+    #expect(plugin.contains("activePermissionRequests.set(key, { sessionID, child })"))
+    #expect(plugin.contains("active.child.kill()"))
+    #expect(plugin.contains("setTimeout(sendResolution, 250)"))
+    #expect(plugin.contains("setTimeout(sendResolution, 1000)"))
+    #expect(plugin.contains("const resolvedRequests = new Map()"))
+    #expect(plugin.contains("activePermissionRequests.delete(key)"))
+    #expect(plugin.contains("request_id: requestID"))
+    #expect(plugin.contains("request_kind: \"permission\""))
+    #expect(plugin.contains("request_state: \"opened\""))
+    #expect(plugin.contains("const immediateAttentionEvents = new Set(["))
+    #expect(plugin.contains("if (immediateAttentionEvents.has(event.type))"))
+    #expect(plugin.contains("void parentResolution.then((parentSessionID) =>"))
+    #expect(plugin.contains("send(\"metadata\", sessionID, parentSessionID"))
     #expect(plugin.contains("\"--mode\", \"permission\""))
     #expect(plugin.contains("permission_summary: permissionSummary(properties)"))
     #expect(plugin.contains("permission_context: permissionContext(properties)"))
@@ -71,6 +99,8 @@ import Testing
     #expect(plugin.contains("metadata.file_path"))
     #expect(plugin.contains("patterns.some((pattern) => permissionText(pattern) === context) ? null : context"))
     #expect(plugin.contains("permission_can_always: true"))
+    #expect(plugin.contains("bounded(properties.action, 128)"))
+    #expect(plugin.contains("Array.isArray(properties.resources)"))
     #expect(plugin.contains("client.permission?.reply"))
     #expect(plugin.contains("client.postSessionIdPermissionsPermissionId"))
     #expect(plugin.contains("decision === \"allowOnce\" ? \"once\""))

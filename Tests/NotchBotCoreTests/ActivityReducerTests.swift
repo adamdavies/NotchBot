@@ -237,6 +237,316 @@ import Testing
     #expect(reducer.primarySession?.isAwaitingPermissionResolution == false)
 }
 
+@Test func actionablePermissionSurvivesFallbackAttentionAndNotifiesWhenNew() {
+    let start = Date(timeIntervalSince1970: 100)
+    let token = String(repeating: "c", count: 32)
+    var reducer = ActivityReducer()
+
+    let fallback = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "permission-session",
+        timestamp: start,
+        reason: "OpenCode needs permission"
+    ))
+    let actionable = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "permission-session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        permission: AgentPermissionRequest(
+            responseToken: token,
+            summary: "Run tests",
+            canAlwaysAllow: true
+        )
+    ))
+    let duplicateFallback = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "permission-session",
+        timestamp: start.addingTimeInterval(2),
+        reason: "OpenCode needs permission"
+    ))
+
+    #expect(fallback.shouldNotify)
+    #expect(actionable.shouldNotify)
+    #expect(!duplicateFallback.shouldNotify)
+    #expect(reducer.primarySession?.permission?.responseToken == token)
+    #expect(reducer.primarySession?.isAwaitingPermissionResolution == true)
+}
+
+@Test func pendingRequestKeepsAttentionAcrossLaterWorkingEvents() {
+    let start = Date(timeIntervalSince1970: 100)
+    let token = String(repeating: "d", count: 32)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "session", timestamp: start))
+    let opened = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        permission: AgentPermissionRequest(
+            responseToken: token,
+            summary: "Bash",
+            canAlwaysAllow: true
+        ),
+        request: AgentRequestUpdate(id: "per-one", kind: .permission, state: .opened)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(2)
+    ))
+
+    #expect(opened.shouldNotify)
+    #expect(reducer.primarySession?.state == .attention)
+    #expect(reducer.primarySession?.pendingRequestCount == 1)
+    #expect(reducer.primarySession?.permission?.responseToken == token)
+
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .requestResolved,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(3),
+        request: AgentRequestUpdate(id: "per-one", kind: .permission, state: .resolved)
+    ))
+
+    #expect(reducer.primarySession?.state == .working)
+    #expect(reducer.primarySession?.pendingRequestCount == 0)
+    #expect(reducer.primarySession?.permission == nil)
+}
+
+@Test func delayedRequestEventIsIndependentFromNewerWorkingTimestamp() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .working,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(2)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        permission: AgentPermissionRequest(
+            responseToken: String(repeating: "9", count: 32),
+            summary: "Bash",
+            canAlwaysAllow: true
+        ),
+        request: AgentRequestUpdate(id: "per-delayed", kind: .permission, state: .opened)
+    ))
+
+    #expect(reducer.primarySession?.state == .attention)
+    #expect(reducer.primarySession?.pendingRequestCount == 1)
+    #expect(reducer.primarySession?.updatedAt == start.addingTimeInterval(2))
+}
+
+@Test func concurrentRequestsResolveAndPresentIndependently() {
+    let start = Date(timeIntervalSince1970: 100)
+    let firstToken = String(repeating: "e", count: 32)
+    let secondToken = String(repeating: "f", count: 32)
+    var reducer = ActivityReducer()
+    let first = AgentPermissionRequest(responseToken: firstToken, summary: "Swift test", canAlwaysAllow: true)
+    let second = AgentPermissionRequest(responseToken: secondToken, summary: "Git diff", canAlwaysAllow: true)
+
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start,
+        reason: "OpenCode needs permission",
+        permission: first,
+        request: AgentRequestUpdate(id: "per-one", kind: .permission, state: .opened)
+    ))
+    let secondChange = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        permission: second,
+        request: AgentRequestUpdate(id: "per-two", kind: .permission, state: .opened)
+    ))
+
+    #expect(secondChange.shouldNotify)
+    #expect(reducer.primarySession?.pendingRequestCount == 2)
+    #expect(reducer.primarySession?.permission?.responseToken == firstToken)
+
+    reducer.markPermissionSubmitted(source: .opencode, sessionID: "session", responseToken: firstToken)
+    #expect(reducer.primarySession?.permission?.responseToken == secondToken)
+    #expect(reducer.primarySession?.pendingRequestCount == 2)
+
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .requestResolved,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(2),
+        request: AgentRequestUpdate(id: "per-one", kind: .permission, state: .resolved)
+    ))
+    #expect(reducer.primarySession?.state == .attention)
+    #expect(reducer.primarySession?.pendingRequestCount == 1)
+    #expect(reducer.primarySession?.permission?.responseToken == secondToken)
+}
+
+@Test func duplicateLogicalRequestDoesNotNotifyTwice() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    let request = AgentRequestUpdate(id: "per-one", kind: .permission, state: .opened)
+    let permission = AgentPermissionRequest(
+        responseToken: String(repeating: "a", count: 32),
+        summary: "Bash",
+        canAlwaysAllow: true
+    )
+    let first = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start,
+        reason: "OpenCode needs permission",
+        permission: permission,
+        request: request
+    ))
+    let duplicate = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        permission: permission,
+        request: request
+    ))
+
+    #expect(first.shouldNotify)
+    #expect(!duplicate.shouldNotify)
+    #expect(reducer.primarySession?.pendingRequestCount == 1)
+}
+
+@Test func resolvedRequestCannotBeReopenedByDelayedHelper() {
+    let start = Date(timeIntervalSince1970: 100)
+    let resolved = AgentRequestUpdate(id: "per-one", kind: .permission, state: .resolved)
+    let opened = AgentRequestUpdate(id: "per-one", kind: .permission, state: .opened)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .requestResolved,
+        sessionID: "session",
+        timestamp: start,
+        request: resolved
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        permission: AgentPermissionRequest(
+            responseToken: String(repeating: "8", count: 32),
+            summary: "Bash",
+            canAlwaysAllow: true
+        ),
+        request: opened
+    ))
+
+    #expect(reducer.sessionCount == 0)
+    #expect(reducer.state == .idle)
+}
+
+@Test func olderResolutionStillClosesNewerDeliveredOpenEvent() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(2),
+        reason: "OpenCode needs permission",
+        request: AgentRequestUpdate(id: "per-one", kind: .permission, state: .opened)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .requestResolved,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        request: AgentRequestUpdate(id: "per-one", kind: .permission, state: .resolved)
+    ))
+
+    #expect(reducer.primarySession?.pendingRequestCount == 0)
+    #expect(reducer.primarySession?.state == .working)
+}
+
+@Test func requestResolutionDoesNotMakePreClearChildLookNewer() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "parent", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "child",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        request: AgentRequestUpdate(id: "per-one", kind: .permission, state: .opened)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .cleared,
+        sessionID: "parent",
+        timestamp: start.addingTimeInterval(2)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .requestResolved,
+        sessionID: "child",
+        timestamp: start.addingTimeInterval(3),
+        request: AgentRequestUpdate(id: "per-one", kind: .permission, state: .resolved)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .metadata,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(4)
+    ))
+
+    #expect(reducer.sessionCount == 0)
+}
+
+@Test func requestKindParticipatesInNotificationIdentity() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    let question = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start,
+        reason: "OpenCode has a question",
+        request: AgentRequestUpdate(id: "shared", kind: .question, state: .opened)
+    ))
+    let permission = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        permission: AgentPermissionRequest(
+            responseToken: String(repeating: "7", count: 32),
+            summary: "Bash",
+            canAlwaysAllow: true
+        ),
+        request: AgentRequestUpdate(id: "shared", kind: .permission, state: .opened)
+    ))
+
+    #expect(question.shouldNotify)
+    #expect(permission.shouldNotify)
+    #expect(reducer.primarySession?.reason == "OpenCode needs permission")
+    #expect(reducer.primarySession?.pendingRequestCount == 2)
+}
+
 @Test func summaryStoreKeepsMostRecentSummaryAfterSessionClears() {
     let start = Date(timeIntervalSince1970: 100)
     var store = AgentSummaryStore()
@@ -541,6 +851,36 @@ import Testing
 
     #expect(reducer.primarySession?.parentSessionID == nil)
     #expect(reducer.primarySession?.taskLabel == "Updated label")
+}
+
+@Test func delayedParentMetadataRemovesChildThatPredatesParentClear() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "parent", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "child",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission"
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .cleared,
+        sessionID: "parent",
+        timestamp: start.addingTimeInterval(2)
+    ))
+
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .metadata,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: start.addingTimeInterval(3)
+    ))
+
+    #expect(reducer.sessionCount == 0)
+    #expect(reducer.state == .idle)
 }
 
 @Test func parentClearRemovesPendingChildMetadata() {

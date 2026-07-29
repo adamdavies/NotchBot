@@ -118,6 +118,10 @@ private struct AgentQueueRow: View {
                         Text("·")
                         Text(reason)
                     }
+                    if session.pendingRequestCount > 1 {
+                        Text("·")
+                        Text("\(session.pendingRequestCount) requests")
+                    }
                 }
                 .font(.system(size: 10, design: .rounded))
                 .foregroundStyle(.white.opacity(0.48))

@@ -61,6 +61,10 @@ final class ActivityModel: ObservableObject {
 
     func receive(_ event: AgentEvent) {
         guard (try? AgentEventValidator.validate(event)) != nil else { return }
+        if event.kind == .requestResolved, let identifier = notificationIdentifier(for: event) {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+        }
         if let rejection = reducer.rejectDescendantOfClearedSession(event) {
             publish(rejection)
             return
@@ -209,11 +213,17 @@ final class ActivityModel: ObservableObject {
         content.body = event.reason ?? "Your agent is waiting for you."
         content.sound = .default
         let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
+            identifier: notificationIdentifier(for: event) ?? UUID().uuidString,
             content: content,
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
+    }
+
+    private func notificationIdentifier(for event: AgentEvent) -> String? {
+        event.request.map {
+            [event.source.rawValue, event.sessionID, $0.kind.rawValue, $0.id].joined(separator: "\u{1f}")
+        }
     }
 
     private func expireAttention(_ event: AgentEvent) {

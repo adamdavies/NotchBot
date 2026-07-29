@@ -65,6 +65,9 @@ import Testing
       "permission_summary":"External directory · /tmp/*",
       "permission_context":"  rm   /tmp/example  ",
       "permission_can_always":true,
+      "request_id":"per-test",
+      "request_kind":"permission",
+      "request_state":"opened",
       "raw_event":{"secret":"ignored"}
     }
     """.utf8)
@@ -73,6 +76,9 @@ import Testing
     #expect(payload?.permissionSummary == "External directory · /tmp/*")
     #expect(payload?.permissionContext == "rm /tmp/example")
     #expect(payload?.permissionCanAlways == true)
+    #expect(payload?.requestID == "per-test")
+    #expect(payload?.requestKind == "permission")
+    #expect(payload?.requestState == "opened")
 }
 
 @Test func declineOutputDoesNotInterruptClaude() throws {

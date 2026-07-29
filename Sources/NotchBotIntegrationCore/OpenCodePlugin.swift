@@ -17,7 +17,18 @@ public enum OpenCodePlugin {
         const taskLabels = new Map()
         const sessionParents = new Map()
         const completedSessions = new Set()
-        const waitingSessions = new Set()
+        const knownRequests = new Map()
+        const resolvedRequests = new Map()
+        const activePermissionRequests = new Map()
+        const sessionGenerations = new Map()
+        const immediateAttentionEvents = new Set([
+          "permission.updated",
+          "permission.asked",
+          "permission.v2.asked",
+          "question.asked",
+          "question.v2.asked",
+          "session.error",
+        ])
         let sendQueue = Promise.resolve()
         \(excerptStorage)
         function bounded(value, maximum) {
@@ -39,6 +50,14 @@ public enum OpenCodePlugin {
         function addBounded(set, value) {
           if (!set.has(value) && set.size >= 256) set.delete(set.values().next().value)
           set.add(value)
+        }
+
+        function nativeRequestID(properties) {
+          return identifier(properties.id ?? properties.requestID ?? properties.permissionID)
+        }
+
+        function requestKey(sessionID, kind, requestID) {
+          return JSON.stringify([sessionID, kind, requestID])
         }
 
         function taskLabel(value) {
@@ -75,11 +94,12 @@ public enum OpenCodePlugin {
         }
 
         function permissionSummary(properties) {
-          const rawAction = bounded(properties.permission, 128) ?? bounded(properties.type, 128) ?? bounded(properties.title, 128) ?? "Permission"
+          const rawAction = bounded(properties.permission, 128) ?? bounded(properties.action, 128) ?? bounded(properties.type, 128) ?? bounded(properties.title, 128) ?? "Permission"
           const words = rawAction.replace(/[_-]+/g, " ")
           const action = words.charAt(0).toUpperCase() + words.slice(1)
           const patterns = Array.isArray(properties.patterns)
             ? properties.patterns
+            : Array.isArray(properties.resources) ? properties.resources
             : Array.isArray(properties.pattern) ? properties.pattern : [properties.pattern]
           const detail = patterns.filter((value) => typeof value === "string" && value.length > 0).slice(0, 3).join(", ")
           return permissionText(`${action}${detail ? ` · ${detail}` : ""}`) ?? "Permission"
@@ -100,11 +120,12 @@ public enum OpenCodePlugin {
           if (!context) return null
           const patterns = Array.isArray(properties.patterns)
             ? properties.patterns
+            : Array.isArray(properties.resources) ? properties.resources
             : Array.isArray(properties.pattern) ? properties.pattern : [properties.pattern]
           return patterns.some((pattern) => permissionText(pattern) === context) ? null : context
         }
 
-        function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, summary, label) {
+        function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, summary, label, request) {
           sessionID = identifier(sessionID)
           if (!sessionID) return
           parentSessionID = identifier(parentSessionID)
@@ -118,6 +139,11 @@ public enum OpenCodePlugin {
           if (parentSessionID && parentSessionID !== sessionID) payload.parent_session_id = parentSessionID
           if (summary) payload.last_assistant_message = summary
           if (label) payload.task_label = label
+          if (request) {
+            payload.request_id = request.id
+            payload.request_kind = request.kind
+            payload.request_state = request.state
+          }
           sendQueue = sendQueue.then(async () => {
             try {
               const child = Bun.spawn(args, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
@@ -136,11 +162,9 @@ public enum OpenCodePlugin {
             send(kind, sessionID, sessionParents.get(sessionID), reason, directory, expiresAfter, summary, taskLabels.get(sessionID) ?? fallbackTaskLabel)
           const sendWorking = (sessionID) => {
             completedSessions.delete(sessionID)
-            waitingSessions.delete(sessionID)
             sendEvent("working", sessionID, null, null, null)
           }
           const sendCompletion = (sessionID, summary) => {
-            if (waitingSessions.has(sessionID)) return
             if (sessionParents.get(sessionID)) {
               sendEvent("cleared", sessionID, null, null, summary)
             } else if (!completedSessions.has(sessionID)) {
@@ -149,6 +173,11 @@ public enum OpenCodePlugin {
             }
           }
           const resolveParentSessionID = async (sessionID, info) => {
+            let generation = sessionGenerations.get(sessionID)
+            if (!generation) {
+              generation = {}
+              setBounded(sessionGenerations, sessionID, generation)
+            }
             const direct = identifier(info?.parentID)
             if (direct && direct !== sessionID) {
               setBounded(sessionParents, sessionID, direct)
@@ -157,6 +186,7 @@ public enum OpenCodePlugin {
             if (sessionParents.has(sessionID)) return sessionParents.get(sessionID)
             try {
               const response = await client.session.get({ path: { id: sessionID } })
+              if (sessionGenerations.get(sessionID) !== generation) return null
               const parentSessionID = identifier(response?.data?.parentID ?? response?.parentID)
               setBounded(sessionParents, sessionID, parentSessionID && parentSessionID !== sessionID ? parentSessionID : null)
             } catch (_) {
@@ -164,10 +194,47 @@ public enum OpenCodePlugin {
             }
             return sessionParents.get(sessionID) ?? null
           }
-          const requestPermission = async (sessionID, properties) => {
-            const requestID = identifier(properties.id ?? properties.permissionID ?? properties.requestID)
-            if (!requestID) {
-              sendEvent("attention", sessionID, "OpenCode needs permission", null, null)
+          const resolveRequest = (sessionID, kind, requestID) => {
+            if (!requestID) return
+            const key = requestKey(sessionID, kind, requestID)
+            knownRequests.delete(key)
+            setBounded(resolvedRequests, key, sessionID)
+            const active = activePermissionRequests.get(key)
+            if (active) {
+              active.child.kill()
+              activePermissionRequests.delete(key)
+            }
+            const sendResolution = () => {
+              send(
+                "request_resolved",
+                sessionID,
+                sessionParents.get(sessionID),
+                null,
+                directory,
+                null,
+                null,
+                taskLabels.get(sessionID) ?? fallbackTaskLabel,
+                { id: requestID, kind, state: "resolved" },
+              )
+            }
+            sendResolution()
+            setTimeout(sendResolution, 250)
+            setTimeout(sendResolution, 1000)
+          }
+          const requestPermission = async (sessionID, properties, requestID, key) => {
+            if (activePermissionRequests.has(key)) return
+            if (activePermissionRequests.size >= 32) {
+              send(
+                "attention",
+                sessionID,
+                sessionParents.get(sessionID),
+                "OpenCode needs permission",
+                directory,
+                null,
+                null,
+                taskLabels.get(sessionID) ?? fallbackTaskLabel,
+                { id: requestID, kind: "permission", state: "opened" },
+              )
               return
             }
             const args = [hookPath, "--source", "opencode", "--kind", "attention", "--reason", "OpenCode needs permission", "--mode", "permission"]
@@ -179,13 +246,33 @@ public enum OpenCodePlugin {
               permission_summary: permissionSummary(properties),
               permission_context: permissionContext(properties),
               permission_can_always: true,
+              request_id: requestID,
+              request_kind: "permission",
+              request_state: "opened",
             }
+            let child = null
             try {
-              const child = Bun.spawn(args, { stdin: "pipe", stdout: "pipe", stderr: "ignore" })
+              child = Bun.spawn(args, { stdin: "pipe", stdout: "pipe", stderr: "ignore" })
+              activePermissionRequests.set(key, { sessionID, child })
               child.stdin.write(JSON.stringify(payload))
               child.stdin.end()
               const output = await new Response(child.stdout).text()
-              if (await child.exited !== 0 || !output) return
+              if (await child.exited !== 0 || !output) {
+                if (knownRequests.has(key)) {
+                  send(
+                    "attention",
+                    sessionID,
+                    sessionParents.get(sessionID),
+                    "OpenCode needs permission",
+                    directory,
+                    null,
+                    null,
+                    taskLabels.get(sessionID) ?? fallbackTaskLabel,
+                    { id: requestID, kind: "permission", state: "opened" },
+                  )
+                }
+                return
+              }
               const decision = JSON.parse(output).decision
               const reply = decision === "allowOnce" ? "once" : decision === "alwaysAllow" ? "always" : decision === "decline" ? "reject" : null
               if (!reply) return
@@ -199,6 +286,21 @@ public enum OpenCodePlugin {
               }
             } catch (_) {
               // OpenCode's native permission prompt remains available on helper or API failure.
+              if (knownRequests.has(key)) {
+                send(
+                  "attention",
+                  sessionID,
+                  sessionParents.get(sessionID),
+                  "OpenCode needs permission",
+                  directory,
+                  null,
+                  null,
+                  taskLabels.get(sessionID) ?? fallbackTaskLabel,
+                  { id: requestID, kind: "permission", state: "opened" },
+                )
+              }
+            } finally {
+              if (activePermissionRequests.get(key)?.child === child) activePermissionRequests.delete(key)
             }
           }
           return {
@@ -207,6 +309,38 @@ public enum OpenCodePlugin {
             const sessionID = identifier(properties.sessionID ?? properties.info?.id)
         \(eventCapture)
             if (!sessionID) return
+
+            if (event.type === "permission.replied" || event.type === "permission.v2.replied") {
+              resolveRequest(sessionID, "permission", nativeRequestID(properties))
+              return
+            }
+            if (event.type === "session.deleted") {
+              setBounded(sessionGenerations, sessionID, {})
+              sendEvent("cleared", sessionID, null, null, null)
+              taskLabels.delete(sessionID)
+              sessionParents.delete(sessionID)\(deletionCleanup)
+              completedSessions.delete(sessionID)
+              for (const [key, requestSessionID] of knownRequests) {
+                if (requestSessionID !== sessionID) continue
+                const [, kind, requestID] = JSON.parse(key)
+                resolveRequest(sessionID, kind, requestID)
+              }
+              for (const [key, active] of activePermissionRequests) {
+                if (active.sessionID !== sessionID) continue
+                active.child.kill()
+                activePermissionRequests.delete(key)
+              }
+              return
+            }
+            if (
+              event.type === "question.replied"
+              || event.type === "question.v2.replied"
+              || event.type === "question.rejected"
+              || event.type === "question.v2.rejected"
+            ) {
+              resolveRequest(sessionID, "question", nativeRequestID(properties))
+              return
+            }
 
             if (event.type === "session.created" || event.type === "session.updated") {
               const parentSessionID = identifier(properties.info?.parentID)
@@ -217,7 +351,18 @@ public enum OpenCodePlugin {
               }
               send("metadata", sessionID, parentSessionID, null, directory, null, null, label)
             }
-            if (!sessionParents.has(sessionID)) await resolveParentSessionID(sessionID, properties.info)
+            if (!sessionParents.has(sessionID)) {
+              const parentResolution = resolveParentSessionID(sessionID, properties.info)
+              if (immediateAttentionEvents.has(event.type)) {
+                void parentResolution.then((parentSessionID) => {
+                  if (parentSessionID) {
+                    send("metadata", sessionID, parentSessionID, null, directory, null, null, taskLabels.get(sessionID) ?? fallbackTaskLabel)
+                  }
+                })
+              } else {
+                await parentResolution
+              }
+            }
 
             switch (event.type) {
               case "session.status":
@@ -237,33 +382,53 @@ public enum OpenCodePlugin {
               }
               case "permission.updated":
               case "permission.asked":
-              case "permission.v2.asked":
-                addBounded(waitingSessions, sessionID)
-                void requestPermission(sessionID, properties)
+              case "permission.v2.asked": {
+                const requestID = nativeRequestID(properties)
+                if (!requestID) {
+                  sendEvent("attention", sessionID, "OpenCode needs permission", null, null)
+                  break
+                }
+                const key = requestKey(sessionID, "permission", requestID)
+                if (resolvedRequests.has(key)) break
+                if (knownRequests.has(key)) break
+                if (knownRequests.size >= 256) {
+                  sendEvent("attention", sessionID, "OpenCode needs permission", null, null)
+                  break
+                }
+                knownRequests.set(key, sessionID)
+                void requestPermission(sessionID, properties, requestID, key)
                 break
+              }
               case "question.asked":
-              case "question.v2.asked":
-                addBounded(waitingSessions, sessionID)
-                sendEvent("attention", sessionID, "OpenCode has a question", null, null)
+              case "question.v2.asked": {
+                const requestID = nativeRequestID(properties)
+                if (!requestID) {
+                  sendEvent("attention", sessionID, "OpenCode has a question", null, null)
+                  break
+                }
+                const key = requestKey(sessionID, "question", requestID)
+                if (resolvedRequests.has(key)) break
+                if (knownRequests.has(key)) break
+                if (knownRequests.size >= 256) {
+                  sendEvent("attention", sessionID, "OpenCode has a question", null, null)
+                  break
+                }
+                knownRequests.set(key, sessionID)
+                send(
+                  "attention",
+                  sessionID,
+                  sessionParents.get(sessionID),
+                  "OpenCode has a question",
+                  directory,
+                  null,
+                  null,
+                  taskLabels.get(sessionID) ?? fallbackTaskLabel,
+                  { id: requestID, kind: "question", state: "opened" },
+                )
                 break
-              case "permission.replied":
-              case "permission.v2.replied":
-              case "question.replied":
-              case "question.v2.replied":
-              case "question.rejected":
-              case "question.v2.rejected":
-                sendWorking(sessionID)
-                break
+              }
               case "session.error":
-                addBounded(waitingSessions, sessionID)
                 sendEvent("attention", sessionID, "OpenCode encountered an error", null, null)\(errorCleanup)
-                break
-              case "session.deleted":
-                sendEvent("cleared", sessionID, null, null, null)
-                taskLabels.delete(sessionID)
-                sessionParents.delete(sessionID)\(deletionCleanup)
-                completedSessions.delete(sessionID)
-                waitingSessions.delete(sessionID)
                 break
             }
           },

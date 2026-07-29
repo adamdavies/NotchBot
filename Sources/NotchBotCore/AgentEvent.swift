@@ -11,6 +11,29 @@ public enum AgentEventKind: String, Codable, Sendable {
     case attention
     case cleared
     case metadata
+    case requestResolved = "request_resolved"
+}
+
+public enum AgentRequestKind: String, Codable, Sendable {
+    case permission
+    case question
+}
+
+public enum AgentRequestState: String, Codable, Sendable {
+    case opened
+    case resolved
+}
+
+public struct AgentRequestUpdate: Codable, Equatable, Sendable {
+    public let id: String
+    public let kind: AgentRequestKind
+    public let state: AgentRequestState
+
+    public init(id: String, kind: AgentRequestKind, state: AgentRequestState) {
+        self.id = id
+        self.kind = kind
+        self.state = state
+    }
 }
 
 public struct AgentPermissionRequest: Codable, Equatable, Sendable {
@@ -49,7 +72,7 @@ public struct AgentPermissionRequest: Codable, Equatable, Sendable {
 }
 
 public struct AgentEvent: Codable, Equatable, Sendable {
-    public static let protocolVersion = 2
+    public static let protocolVersion = 3
 
     public let version: Int
     public let source: AgentSource
@@ -65,6 +88,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
     public let summary: String?
     public let taskLabel: String?
     public let permission: AgentPermissionRequest?
+    public let request: AgentRequestUpdate?
 
     public init(
         source: AgentSource,
@@ -79,7 +103,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         expiresAfter: TimeInterval? = nil,
         summary: String? = nil,
         taskLabel: String? = nil,
-        permission: AgentPermissionRequest? = nil
+        permission: AgentPermissionRequest? = nil,
+        request: AgentRequestUpdate? = nil
     ) {
         self.version = Self.protocolVersion
         self.source = source
@@ -95,6 +120,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.summary = summary
         self.taskLabel = AgentTaskLabel.normalized(taskLabel)
         self.permission = permission
+        self.request = request
     }
 
     public var isCompletionAttention: Bool {
@@ -121,6 +147,7 @@ public enum AgentEventValidationError: Error, Equatable, Sendable {
     case invalidExpiry
     case invalidProcessID
     case invalidPermission
+    case invalidRequest
 }
 
 public enum AgentEventValidator {
@@ -160,11 +187,21 @@ public enum AgentEventValidator {
         }
         if let permission = event.permission {
             guard event.kind == .attention, event.source != .preview,
-                  validResponseToken(permission.responseToken),
-                  AgentPermissionRequest.normalizedSummary(permission.summary) == permission.summary,
-                  AgentPermissionRequest.normalizedSummary(permission.context) == permission.context else {
+                   validResponseToken(permission.responseToken),
+                   AgentPermissionRequest.normalizedSummary(permission.summary) == permission.summary,
+                   AgentPermissionRequest.normalizedSummary(permission.context) == permission.context else {
                 throw AgentEventValidationError.invalidPermission
             }
+        }
+        if let request = event.request {
+            guard event.source == .opencode, validIdentifier(request.id),
+                  (request.state == .opened && event.kind == .attention
+                      || request.state == .resolved && event.kind == .requestResolved),
+                  event.permission == nil || request.kind == .permission else {
+                throw AgentEventValidationError.invalidRequest
+            }
+        } else if event.kind == .requestResolved {
+            throw AgentEventValidationError.invalidRequest
         }
 
         let timestamp = event.timestamp.timeIntervalSince1970
