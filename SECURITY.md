@@ -26,4 +26,4 @@ The integration uses the helper and its `.notchbot-owner` marker, `integration-p
 
 ## Sandbox Status
 
-NotchBot 0.2.3 is not App Sandbox enabled and requests no signing entitlements. App Sandbox adoption is deferred to v0.3.0.
+NotchBot 0.2.4 is not App Sandbox enabled and requests no signing entitlements. App Sandbox adoption is deferred to v0.3.0.

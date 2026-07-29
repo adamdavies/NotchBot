@@ -6,19 +6,19 @@
 
 NotchBot is a native macOS menu-bar companion for AI coding agents. It extends a MacBook notch with a pixel robot that sleeps with drifting Zs while idle, walks while an agent is working, and jumps with a yellow pulse when an agent needs attention.
 
-Version 0.2.3 supports OpenCode and Claude Code on Apple Silicon Macs running macOS 14 or later.
+Version 0.2.4 supports OpenCode and Claude Code on Apple Silicon Macs running macOS 14 or later.
 
 ## Install
 
-Download `NotchBot-0.2.3.dmg` and `NotchBot-0.2.3.dmg.sha256` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), verify the checksum, open the DMG, and move NotchBot into `/Applications`.
+Download `NotchBot-0.2.4.dmg` and `NotchBot-0.2.4.dmg.sha256` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), verify the checksum, open the DMG, and move NotchBot into `/Applications`.
 
 ```sh
-shasum -a 256 -c NotchBot-0.2.3.dmg.sha256
+shasum -a 256 -c NotchBot-0.2.4.dmg.sha256
 ```
 
 Developer ID signing and notarization are preferred. When those credentials are unavailable, an explicitly produced ad-hoc release may require right-clicking NotchBot and selecting **Open**; the release notes identify that status.
 
-Open the fixed robot menu-bar icon and select **Install Integrations** for a first installation. After updating NotchBot, including to v0.2.3, select **Update Integrations** and restart all running OpenCode and Claude Code sessions so they load the current integration.
+Open the fixed robot menu-bar icon and select **Install Integrations** for a first installation. After updating NotchBot, including to v0.2.4, select **Update Integrations** and restart all running OpenCode and Claude Code sessions so they load the current integration.
 
 ## Current Features
 
@@ -162,7 +162,7 @@ NOTARIZE=1 NOTARY_PROFILE="notchbot-notary" scripts/create-dmg.sh
 
 ## Integration Files
 
-NotchBot's v0.2.3 integration and local transport use these paths:
+NotchBot's v0.2.4 integration and local transport use these paths:
 
 - `~/Library/Application Support/NotchBot/bin/notchbot-hook`
 - `~/Library/Application Support/NotchBot/bin/notchbot-hook.notchbot-owner`
@@ -187,7 +187,7 @@ Claude Code supplies its hook event JSON to `notchbot-hook` on standard input. T
 
 The socket is readable and writable only by the current macOS user. This protects against other local user accounts, not other processes running as the same user: a same-user process can inspect integration files or forge local events. See [SECURITY.md](SECURITY.md) for the full threat model.
 
-NotchBot 0.2.3 is not App Sandbox enabled. Sandboxing is deferred to v0.3.0; the 0.2.3 signature intentionally requests no entitlements.
+NotchBot 0.2.4 is not App Sandbox enabled. Sandboxing is deferred to v0.3.0; the 0.2.4 signature intentionally requests no entitlements.
 
 ## License
 
