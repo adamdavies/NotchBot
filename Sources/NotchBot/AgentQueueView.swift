@@ -15,6 +15,19 @@ struct AgentQueueView: View {
                 Text(queueSummary)
                     .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(.white.opacity(0.5))
+                Button("Clear All") {
+                    model.clearAllSessions()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.68))
+                .padding(.horizontal, 7)
+                .frame(height: 22)
+                .background(Capsule().fill(Color.white.opacity(0.09)))
+                .overlay {
+                    Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1)
+                }
+                .help("Clear all queue entries")
             }
             .padding(.horizontal, 14)
             .frame(height: 42)
@@ -24,9 +37,13 @@ struct AgentQueueView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(model.activeSessions.enumerated()), id: \.element.id) { index, session in
-                        AgentQueueRow(session: session) { permission, decision in
-                            model.respond(to: permission, for: session, with: decision)
-                        }
+                        AgentQueueRow(
+                            session: session,
+                            onClear: { model.clear(session) },
+                            onPermissionDecision: { permission, decision in
+                                model.respond(to: permission, for: session, with: decision)
+                            }
+                        )
                         .frame(height: rowHeight(for: session))
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -87,6 +104,7 @@ struct AgentQueueView: View {
 
 private struct AgentQueueRow: View {
     let session: SessionActivity
+    let onClear: () -> Void
     let onPermissionDecision: (AgentPermissionRequest, AgentPermissionDecision) -> Void
 
     var body: some View {
@@ -160,6 +178,20 @@ private struct AgentQueueRow: View {
                     .font(.system(size: 9.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(statusColor)
             }
+
+            Button(action: onClear) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.white.opacity(0.08)))
+                    .overlay {
+                        Circle().stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.55))
+            .accessibilityLabel("Clear \(title) from queue")
+            .help("Clear this queue entry")
         }
         .padding(.horizontal, 14)
     }

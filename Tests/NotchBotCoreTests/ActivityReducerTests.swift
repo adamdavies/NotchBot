@@ -90,6 +90,31 @@ import Testing
     #expect(reducer.sessionCount == 0)
 }
 
+@Test func clearingOneSessionKeepsUnrelatedActivity() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "one", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "two",
+        timestamp: start.addingTimeInterval(1)
+    ))
+
+    let change = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .cleared,
+        sessionID: "two",
+        timestamp: start.addingTimeInterval(2)
+    ))
+
+    #expect(change.state == .working)
+    #expect(change.primarySession?.id == "claude:one")
+    #expect(reducer.activities.map(\.id) == ["claude:one"])
+    #expect(reducer.activeCount == 1)
+    #expect(reducer.attentionCount == 0)
+}
+
 @Test func activitiesOrderAttentionBeforeWorkingAndUseSourceQualifiedIDs() {
     let start = Date(timeIntervalSince1970: 100)
     var reducer = ActivityReducer()

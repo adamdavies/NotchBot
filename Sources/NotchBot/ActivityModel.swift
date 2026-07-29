@@ -157,6 +157,27 @@ final class ActivityModel: ObservableObject {
         focusTerminal(for: session)
     }
 
+    func clear(_ session: SessionActivity) {
+        receive(AgentEvent(
+            source: session.source,
+            kind: .cleared,
+            sessionID: session.sessionID
+        ))
+    }
+
+    func clearAllSessions() {
+        let sessions = activeSessions
+        let timestamp = Date()
+        for session in sessions {
+            receive(AgentEvent(
+                source: session.source,
+                kind: .cleared,
+                sessionID: session.sessionID,
+                timestamp: timestamp
+            ))
+        }
+    }
+
     func respond(to permission: AgentPermissionRequest, for session: SessionActivity, with decision: AgentPermissionDecision) {
         guard session.permission?.responseToken == permission.responseToken else { return }
         let response = AgentPermissionResponse(responseToken: permission.responseToken, decision: decision)
