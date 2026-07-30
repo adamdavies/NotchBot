@@ -8,17 +8,11 @@ import ServiceManagement
 final class IntegrationInstaller: ObservableObject {
     @Published private(set) var message = "Integrations not installed"
     @Published private(set) var launchesAtLogin = SMAppService.mainApp.status == .enabled
-    @Published private(set) var assistantExcerptsEnabled: Bool
     @Published private(set) var requiresUpdate = false
 
     private let fileManager = FileManager.default
 
     init() {
-        let policyURL = NotchBotIntegrationFiles.privacyPolicyURL(
-            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
-        )
-        assistantExcerptsEnabled = IntegrationPrivacyPolicy.load(from: policyURL)
-            .assistantExcerptsEnabled
         refreshStatus()
     }
 
@@ -29,43 +23,6 @@ final class IntegrationInstaller: ObservableObject {
     /// This distinct user action is required to replace the less-private v0.1 generated files.
     func updateIntegrations() {
         performInstallation(allowLegacyUpdate: true)
-    }
-
-    func setAssistantExcerptsEnabled(_ enabled: Bool) {
-        do {
-            try preparePrivateSupportDirectory()
-            if itemExists(at: openCodePluginURL) {
-                guard try isOwnedPlugin(at: openCodePluginURL) else {
-                    throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
-                }
-            }
-            if itemExists(at: openCodePluginURL) {
-                try writeOpenCodePlugin(hookURL: NotchBotPaths.installedHookURL, excerptsEnabled: enabled)
-            }
-            do {
-                try writePrivacyPolicy(enabled: enabled)
-            } catch {
-                if itemExists(at: openCodePluginURL) {
-                    try? writeOpenCodePlugin(
-                        hookURL: NotchBotPaths.installedHookURL,
-                        excerptsEnabled: assistantExcerptsEnabled
-                    )
-                }
-                throw error
-            }
-            assistantExcerptsEnabled = enabled
-            message = enabled
-                ? "Assistant excerpts enabled"
-                : "Assistant excerpts disabled"
-        } catch {
-            assistantExcerptsEnabled = IntegrationPrivacyPolicy.load(from: privacyPolicyURL)
-                .assistantExcerptsEnabled
-            message = "Privacy setting failed: \(error.localizedDescription)"
-        }
-    }
-
-    func toggleAssistantExcerpts() {
-        setAssistantExcerptsEnabled(!assistantExcerptsEnabled)
     }
 
     func uninstall() {
@@ -103,6 +60,7 @@ final class IntegrationInstaller: ObservableObject {
             if itemExists(at: installStatusURL) {
                 try fileManager.removeItem(at: installStatusURL)
             }
+            try removeLegacyPrivacyPolicyIfOwned()
             message = "Integrations removed"
             requiresUpdate = false
         } catch {
@@ -137,14 +95,6 @@ final class IntegrationInstaller: ObservableObject {
                 allowLegacyUpdate: allowLegacyUpdate && outdated,
                 allowHelperUpdate: helperUpdateAllowed
             )
-            let isV01 = outdated ? try hasV01Installation() : false
-            if allowLegacyUpdate && isV01 {
-                try writePrivacyPolicy(enabled: false)
-                assistantExcerptsEnabled = false
-            } else {
-                try writePrivacyPolicy(enabled: assistantExcerptsEnabled)
-            }
-
             let hookURL = try installHookExecutable(allowLegacyUpdate: helperUpdateAllowed)
             try installOpenCodePlugin(
                 hookURL: hookURL,
@@ -152,6 +102,7 @@ final class IntegrationInstaller: ObservableObject {
             )
             try updateClaudeSettings(install: true)
             try writeInstallStatus()
+            try removeLegacyPrivacyPolicyIfOwned()
             message = "OpenCode and Claude Code connected"
             requiresUpdate = false
         } catch {
@@ -235,18 +186,15 @@ final class IntegrationInstaller: ObservableObject {
                 throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
             }
         }
-        try writeOpenCodePlugin(hookURL: hookURL, excerptsEnabled: assistantExcerptsEnabled)
+        try writeOpenCodePlugin(hookURL: hookURL)
     }
 
-    private func writeOpenCodePlugin(hookURL: URL, excerptsEnabled: Bool) throws {
+    private func writeOpenCodePlugin(hookURL: URL) throws {
         try fileManager.createDirectory(
             at: openCodePluginURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let plugin = OpenCodePlugin.generate(
-            hookPath: hookURL.path,
-            assistantExcerptsEnabled: excerptsEnabled
-        )
+        let plugin = OpenCodePlugin.generate(hookPath: hookURL.path)
         try writeAtomically(Data(plugin.utf8), to: openCodePluginURL, permissions: 0o600)
     }
 
@@ -327,10 +275,8 @@ final class IntegrationInstaller: ObservableObject {
         }
     }
 
-    private var privacyPolicyURL: URL {
-        NotchBotIntegrationFiles.privacyPolicyURL(
-            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
-        )
+    private var legacyPrivacyPolicyURL: URL {
+        NotchBotPaths.applicationSupportDirectory.appendingPathComponent("integration-privacy.json")
     }
 
     private var installStatusURL: URL {
@@ -343,9 +289,13 @@ final class IntegrationInstaller: ObservableObject {
         NotchBotIntegrationFiles.helperOwnershipURL(helperURL: NotchBotPaths.installedHookURL)
     }
 
-    private func writePrivacyPolicy(enabled: Bool) throws {
-        let data = try JSONEncoder().encode(IntegrationPrivacyPolicy(assistantExcerptsEnabled: enabled))
-        try writeAtomically(data, to: privacyPolicyURL, permissions: 0o600)
+    private func removeLegacyPrivacyPolicyIfOwned() throws {
+        guard itemExists(at: legacyPrivacyPolicyURL), try regularFile(at: legacyPrivacyPolicyURL) else {
+            return
+        }
+        guard let data = try? boundedData(at: legacyPrivacyPolicyURL, maximum: 4_096) else { return }
+        guard LegacyIntegrationPrivacyPolicy.recognizes(data) else { return }
+        try fileManager.removeItem(at: legacyPrivacyPolicyURL)
     }
 
     private func writeInstallStatus() throws {
@@ -365,11 +315,6 @@ final class IntegrationInstaller: ObservableObject {
         }
         if itemExists(at: helperOwnershipURL), try isPreviousHelperMarker() { return true }
         return try hasManagedClaudeHooks() && !isCurrentInstallationMarked()
-    }
-
-    private func hasV01Installation() throws -> Bool {
-        if itemExists(at: openCodePluginURL), try isLegacyPlugin(at: openCodePluginURL) { return true }
-        return try hasManagedClaudeHooks() && !hasV020OrCurrentMarker()
     }
 
     private func canReplaceOutdatedHelper() throws -> Bool {

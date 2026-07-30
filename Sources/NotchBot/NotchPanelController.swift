@@ -101,9 +101,9 @@ private final class DisplayPanelController {
         )
 
         model.$activeSessions
-            .combineLatest(model.$latestSummary, model.$previewState)
+            .combineLatest(model.$previewState)
             .receive(on: RunLoop.main)
-            .sink { [weak self] _, _, _ in
+            .sink { [weak self] _, _ in
                 guard let self else { return }
                 self.updateDetailFrame()
                 if self.summaryPanel.isVisible, !self.hasDetailContent {
@@ -236,12 +236,12 @@ private final class DisplayPanelController {
     }
 
     private var hasDetailContent: Bool {
-        !model.isPreviewing && (!model.activeSessions.isEmpty || model.latestSummary != nil)
+        !model.isPreviewing
     }
 
     private var detailSize: NSSize {
         guard !model.activeSessions.isEmpty else {
-            return NSSize(width: 320, height: 104)
+            return NSSize(width: 320, height: 80)
         }
         let height = model.activeSessions.prefix(5).reduce(CGFloat(42)) { result, session in
             guard let permission = session.permission else { return result + 58 }
@@ -269,6 +269,11 @@ private final class DisplayPanelController {
         if summaryPanel.isVisible {
             summaryPanel.contentView?.layer?.removeAllAnimations()
             summaryPanel.setFrame(summaryFrame, display: true)
+            let isMouseInsideUpdatedFrame = summaryFrame.contains(NSEvent.mouseLocation)
+            if summaryPanelHovered != isMouseInsideUpdatedFrame {
+                summaryPanelHovered = isMouseInsideUpdatedFrame
+                updateSummaryVisibility()
+            }
         }
     }
 

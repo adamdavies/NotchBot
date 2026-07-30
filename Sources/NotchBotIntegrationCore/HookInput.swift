@@ -68,40 +68,15 @@ public enum HookInput {
         )
     }
 
-    public static func decodePayload(
-        from input: Data,
-        assistantExcerptsEnabled: Bool
-    ) throws -> HookPayload? {
+    public static func decodePayload(from input: Data) throws -> HookPayload? {
         guard input.count <= maximumByteCount else { throw HookInputError.inputTooLarge }
         guard !input.isEmpty else { return nil }
-        if assistantExcerptsEnabled {
-            guard let decoded = try? JSONDecoder().decode(ExcerptPayload.self, from: input) else {
-                throw HookInputError.invalidJSON
-            }
-            return HookPayload(
-                sessionID: try validatedIdentifier(decoded.sessionID),
-                cwd: bounded(decoded.cwd, bytes: 1_024),
-                lastAssistantMessage: bounded(decoded.lastAssistantMessage, bytes: 1_024),
-                sessionTitle: boundedLabel(decoded.sessionTitle),
-                agentType: boundedLabel(decoded.agentType),
-                taskLabel: boundedLabel(decoded.taskLabel),
-                agentID: try validatedIdentifier(decoded.agentID),
-                parentSessionID: try validatedIdentifier(decoded.parentSessionID),
-                permissionSummary: permissionSummary(decoded.permissionSummary),
-                permissionContext: permissionSummary(decoded.permissionContext),
-                permissionCanAlways: decoded.permissionCanAlways ?? false,
-                requestID: try validatedIdentifier(decoded.requestID),
-                requestKind: decoded.requestKind,
-                requestState: decoded.requestState
-            )
-        }
         guard let decoded = try? JSONDecoder().decode(BasicPayload.self, from: input) else {
             throw HookInputError.invalidJSON
         }
         return HookPayload(
             sessionID: try validatedIdentifier(decoded.sessionID),
             cwd: bounded(decoded.cwd, bytes: 1_024),
-            lastAssistantMessage: nil,
             sessionTitle: boundedLabel(decoded.sessionTitle),
             agentType: boundedLabel(decoded.agentType),
             taskLabel: boundedLabel(decoded.taskLabel),
@@ -184,7 +159,6 @@ public enum HookInput {
 public struct HookPayload: Equatable, Sendable {
     public let sessionID: String?
     public let cwd: String?
-    public let lastAssistantMessage: String?
     public let sessionTitle: String?
     public let agentType: String?
     public let taskLabel: String?
@@ -216,40 +190,6 @@ private struct BasicPayload: Decodable {
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
         case cwd
-        case sessionTitle = "session_title"
-        case agentType = "agent_type"
-        case taskLabel = "task_label"
-        case agentID = "agent_id"
-        case parentSessionID = "parent_session_id"
-        case permissionSummary = "permission_summary"
-        case permissionContext = "permission_context"
-        case permissionCanAlways = "permission_can_always"
-        case requestID = "request_id"
-        case requestKind = "request_kind"
-        case requestState = "request_state"
-    }
-}
-
-private struct ExcerptPayload: Decodable {
-    let sessionID: String?
-    let cwd: String?
-    let lastAssistantMessage: String?
-    let sessionTitle: String?
-    let agentType: String?
-    let taskLabel: String?
-    let agentID: String?
-    let parentSessionID: String?
-    let permissionSummary: String?
-    let permissionContext: String?
-    let permissionCanAlways: Bool?
-    let requestID: String?
-    let requestKind: String?
-    let requestState: String?
-
-    enum CodingKeys: String, CodingKey {
-        case sessionID = "session_id"
-        case cwd
-        case lastAssistantMessage = "last_assistant_message"
         case sessionTitle = "session_title"
         case agentType = "agent_type"
         case taskLabel = "task_label"

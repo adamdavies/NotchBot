@@ -71,7 +71,7 @@ import Testing
       "raw_event":{"secret":"ignored"}
     }
     """.utf8)
-    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
+    let payload = try HookInput.decodePayload(from: data)
 
     #expect(payload?.permissionSummary == "External directory · /tmp/*")
     #expect(payload?.permissionContext == "rm /tmp/example")
@@ -94,17 +94,18 @@ import Testing
     let data = Data("""
     {"session_id":"session","cwd":"/tmp/project","last_assistant_message":"private result","prompt":"ignored"}
     """.utf8)
-    let disabled = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
-    let enabled = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: true)
+    let payload = try HookInput.decodePayload(from: data)
+    let withoutPrivateFields = try HookInput.decodePayload(from: Data(
+        "{\"session_id\":\"session\",\"cwd\":\"/tmp/project\"}".utf8
+    ))
 
-    #expect(disabled?.sessionID == "session")
-    #expect(disabled?.cwd == "/tmp/project")
-    #expect(disabled?.lastAssistantMessage == nil)
-    #expect(enabled?.lastAssistantMessage == "private result")
+    #expect(payload?.sessionID == "session")
+    #expect(payload?.cwd == "/tmp/project")
+    #expect(payload == withoutPrivateFields)
 
     let overflow = Data(repeating: 0x20, count: HookInput.maximumByteCount + 1)
     #expect(throws: HookInputError.inputTooLarge) {
-        try HookInput.decodePayload(from: overflow, assistantExcerptsEnabled: true)
+        try HookInput.decodePayload(from: overflow)
     }
 }
 
@@ -112,7 +113,7 @@ import Testing
     let longSession = String(repeating: "s", count: 129)
     let data = try JSONSerialization.data(withJSONObject: ["session_id": longSession])
     #expect(throws: HookInputError.invalidJSON) {
-        try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
+        try HookInput.decodePayload(from: data)
     }
 
     #expect(throws: HookInputError.invalidArguments) {
@@ -136,7 +137,7 @@ import Testing
       "transcript":"private transcript"
     }
     """.utf8)
-    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
+    let payload = try HookInput.decodePayload(from: data)
 
     #expect(payload?.sessionTitle == "Session title")
     #expect(payload?.agentType == "Explore")
@@ -144,23 +145,22 @@ import Testing
     #expect(HookInput.taskLabel(from: payload, source: "opencode") == "OpenCode title")
 }
 
-@Test func taskLabelFallbacksAreBoundedAndDoNotUseExcerptText() throws {
+@Test func taskLabelFallbacksAreBoundedAndIgnoreResponseText() throws {
     let data = Data("""
     {"cwd":"/tmp/project","last_assistant_message":"private result","prompt":"private prompt"}
     """.utf8)
-    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: true)
+    let payload = try HookInput.decodePayload(from: data)
 
     #expect(HookInput.taskLabel(from: payload, source: "claude") == "project")
     #expect(HookInput.taskLabel(from: nil, source: "claude") == "Claude Code")
     #expect(HookInput.taskLabel(from: nil, source: "opencode") == "OpenCode")
-    #expect(HookInput.taskLabel(from: payload, source: "claude") != payload?.lastAssistantMessage)
 }
 
 @Test func subagentIdentifiersAreAllowlistedAndValidated() throws {
     let data = Data("""
     {"session_id":"parent","agent_id":"child","parent_session_id":"root","agent_type":"Explore","task_id":"ignored"}
     """.utf8)
-    let payload = try HookInput.decodePayload(from: data, assistantExcerptsEnabled: false)
+    let payload = try HookInput.decodePayload(from: data)
 
     #expect(payload?.sessionID == "parent")
     #expect(payload?.agentID == "child")
@@ -169,6 +169,6 @@ import Testing
 
     let invalid = Data("{\"agent_id\":\"bad\\nidentifier\"}".utf8)
     #expect(throws: HookInputError.invalidJSON) {
-        try HookInput.decodePayload(from: invalid, assistantExcerptsEnabled: false)
+        try HookInput.decodePayload(from: invalid)
     }
 }

@@ -1,16 +1,16 @@
 import Testing
 @testable import NotchBotIntegrationCore
 
-@Test func disabledPluginNeverCollectsAssistantResponseText() {
+@Test func pluginNeverCollectsAssistantResponseText() {
     let plugin = OpenCodePlugin.generate(
-        hookPath: "/Users/test/Library/Application Support/NotchBot/bin/notchbot-hook",
-        assistantExcerptsEnabled: false
+        hookPath: "/Users/test/Library/Application Support/NotchBot/bin/notchbot-hook"
     )
 
     #expect(!plugin.contains("message.updated"))
     #expect(!plugin.contains("message.part.updated"))
     #expect(!plugin.contains("properties.part.text"))
     #expect(!plugin.contains("latestResponses"))
+    #expect(!plugin.contains("last_assistant_message"))
     #expect(!plugin.contains("--session"))
     #expect(!plugin.contains("--cwd"))
     #expect(!plugin.contains("--summary"))
@@ -18,25 +18,21 @@ import Testing
     #expect(plugin.contains("JSON.stringify(payload)"))
 }
 
-@Test func enabledPluginTruncatesBeforeBoundedStorageAndClearsResponses() {
-    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", assistantExcerptsEnabled: true)
+@Test func pluginBoundsLifecycleStateAndHandlesRejectedQuestions() {
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook")
 
     #expect(plugin.contains("map.size >= 256"))
-    #expect(plugin.contains("const response = excerpt(properties.part.text)"))
-    #expect(plugin.contains("setBounded(latestResponses, partSessionID, response)"))
-    #expect(plugin.contains("latestResponses.delete(sessionID)"))
-    #expect(plugin.contains("normalized.length > 240"))
     #expect(plugin.contains("question.rejected"))
     #expect(plugin.contains("question.v2.rejected"))
 }
 
 @Test func pluginEscapesHookPathAsAJSONString() {
-    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/a\"b\\c", assistantExcerptsEnabled: false)
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/a\"b\\c")
     #expect(plugin.contains("const hookPath = \"/tmp/a\\\"b\\\\c\""))
 }
 
 @Test func requestRepliesResolveOnlyTheirExactRequest() throws {
-    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", assistantExcerptsEnabled: false)
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook")
     let resolution = try #require(plugin.range(of: "event.type === \"permission.replied\""))
     let parentLookup = try #require(plugin.range(of: "if (!sessionParents.has(sessionID))"))
 
@@ -48,7 +44,7 @@ import Testing
 }
 
 @Test func pluginCachesOnlyExplicitSessionTitlesAndUsesMetadataFallbacks() {
-    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", assistantExcerptsEnabled: false)
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook")
 
     #expect(plugin.contains("event.type === \"session.created\" || event.type === \"session.updated\""))
     #expect(plugin.contains("const label = taskLabel(properties.info?.title)"))
@@ -69,8 +65,8 @@ import Testing
     #expect(plugin.contains("const knownRequests = new Map()"))
     #expect(!plugin.contains("waitingSessions"))
     #expect(plugin.contains("if (!completedSessions.has(sessionID))"))
-    #expect(plugin.contains("sendEvent(\"attention\", sessionID, \"OpenCode finished working\", null, summary)"))
-    #expect(plugin.contains("sendCompletion(sessionID, summary)"))
+    #expect(plugin.contains("sendEvent(\"attention\", sessionID, \"OpenCode finished working\", null)"))
+    #expect(plugin.contains("sendCompletion(sessionID)"))
     #expect(!plugin.contains("OpenCode finished working\", 2.5"))
     #expect(plugin.contains("sessionParents.delete(sessionID)"))
     #expect(plugin.contains("sendEvent(\"attention\", sessionID, \"OpenCode needs permission\""))

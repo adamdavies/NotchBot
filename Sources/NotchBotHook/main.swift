@@ -29,17 +29,10 @@ do {
     exit(64)
 }
 
-let policyURL = NotchBotIntegrationFiles.privacyPolicyURL(
-    applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
-)
-let policy = IntegrationPrivacyPolicy.load(from: policyURL)
 let input = FileHandle.standardInput.readData(ofLength: HookInput.maximumByteCount + 1)
 let payload: HookPayload?
 do {
-    payload = try HookInput.decodePayload(
-        from: input,
-        assistantExcerptsEnabled: policy.assistantExcerptsEnabled
-    )
+    payload = try HookInput.decodePayload(from: input)
 } catch {
     exit(65)
 }
@@ -59,9 +52,6 @@ let parentSessionID: String? = if isClaudeSubagent {
     nil
 }
 let cwd = payload?.cwd ?? bounded(environment["PWD"], bytes: 1_024)
-let summary = policy.assistantExcerptsEnabled
-    ? AgentSummaryText.excerpt(from: payload?.lastAssistantMessage ?? "")
-    : nil
 let taskLabel: String? = if isClaudeSubagent {
     HookInput.subagentLabel(from: payload)
 } else if source == .claude && kind != .metadata {
@@ -123,7 +113,6 @@ let event = AgentEvent(
     terminalProcessID: nil,
     reason: options.reason,
     expiresAfter: options.expiresAfter,
-    summary: summary,
     taskLabel: taskLabel,
     permission: permission,
     request: request

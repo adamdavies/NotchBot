@@ -11,17 +11,14 @@ final class ActivityModel: ObservableObject {
     @Published private(set) var attentionSequence = 0
     @Published private(set) var activeAgentCount = 0
     @Published private(set) var waitingAgentCount = 0
-    @Published private(set) var latestSummary: LatestAgentSummary?
     @Published private(set) var previewState: RobotState?
     @Published private(set) var activeSessions: [SessionActivity] = []
     @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
 
     private var reducer = ActivityReducer()
-    private var summaryStore = AgentSummaryStore()
     private var previewTask: Task<Void, Never>?
     private var expiryTasks: [String: Task<Void, Never>] = [:]
     private var maintenanceTask: Task<Void, Never>?
-    private var responseExcerptsEnabled = false
 
     init() {
         maintenanceTask = Task { [weak self] in
@@ -77,10 +74,6 @@ final class ActivityModel: ObservableObject {
         let change = reducer.apply(event)
         publish(change)
 
-        if responseExcerptsEnabled, event.summary != nil {
-            latestSummary = summaryStore.apply(event)
-        }
-
         if change.shouldNotify {
             attentionSequence += 1
             sendNotification(for: event)
@@ -112,18 +105,6 @@ final class ActivityModel: ObservableObject {
         previewTask?.cancel()
         previewTask = nil
         previewState = nil
-    }
-
-    func clearSummary() {
-        summaryStore = AgentSummaryStore()
-        latestSummary = nil
-    }
-
-    func setResponseExcerptsEnabled(_ enabled: Bool) {
-        responseExcerptsEnabled = enabled
-        if !enabled {
-            clearSummary()
-        }
     }
 
     func focusPrimaryTerminal() {
@@ -283,7 +264,6 @@ final class ActivityModel: ObservableObject {
     private func performMaintenance(now: Date = Date()) {
         reducer.removeSessions(olderThan: now.addingTimeInterval(-30 * 60))
         cancelOrphanedExpiryTasks()
-        latestSummary = summaryStore.removeLatest(olderThan: now.addingTimeInterval(-15 * 60))
         robotState = reducer.state
         primarySession = reducer.primarySession
         activeAgentCount = reducer.activeCount

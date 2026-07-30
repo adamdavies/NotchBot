@@ -192,15 +192,6 @@ import Testing
     #expect(reducer.primarySession?.state == .idle)
 }
 
-@Test func summaryExcerptNormalizesWhitespaceAndTruncates() {
-    let normalized = AgentSummaryText.excerpt(from: "  Finished\n\n editing\tthree files.  ")
-    let truncated = AgentSummaryText.excerpt(from: String(repeating: "x", count: 300))
-
-    #expect(normalized == "Finished editing three files.")
-    #expect(truncated?.count == 240)
-    #expect(truncated?.hasSuffix("...") == true)
-}
-
 @Test func completionAttentionIsIdentifiedIndependentlyOfExpiry() {
     let openCode = AgentEvent(
         source: .opencode,
@@ -570,32 +561,6 @@ import Testing
     #expect(permission.shouldNotify)
     #expect(reducer.primarySession?.reason == "OpenCode needs permission")
     #expect(reducer.primarySession?.pendingRequestCount == 2)
-}
-
-@Test func summaryStoreKeepsMostRecentSummaryAfterSessionClears() {
-    let start = Date(timeIntervalSince1970: 100)
-    var store = AgentSummaryStore()
-    store.apply(AgentEvent(
-        source: .claude,
-        kind: .attention,
-        sessionID: "one",
-        timestamp: start,
-        workingDirectory: "/tmp/older",
-        summary: "Older result"
-    ))
-    store.apply(AgentEvent(
-        source: .opencode,
-        kind: .attention,
-        sessionID: "two",
-        timestamp: start.addingTimeInterval(1),
-        workingDirectory: "/tmp/newer",
-        summary: "Newer result"
-    ))
-    store.apply(AgentEvent(source: .opencode, kind: .cleared, sessionID: "two"))
-
-    #expect(store.latest?.text == "Newer result")
-    #expect(store.latest?.projectName == "newer")
-    #expect(store.latest?.source == .opencode)
 }
 
 @Test func taskLabelsAreNormalizedAndBounded() {

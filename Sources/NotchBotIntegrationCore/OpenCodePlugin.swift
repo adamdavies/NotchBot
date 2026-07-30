@@ -1,15 +1,8 @@
 import Foundation
 
 public enum OpenCodePlugin {
-    public static func generate(hookPath: String, assistantExcerptsEnabled: Bool) -> String {
+    public static func generate(hookPath: String) -> String {
         let pathLiteral = jsonString(hookPath)
-        let excerptStorage = assistantExcerptsEnabled ? enabledExcerptStorage : ""
-        let eventCapture = assistantExcerptsEnabled ? enabledEventCapture : ""
-        let attentionSummary = assistantExcerptsEnabled
-            ? "const summary = takeResponse(sessionID)"
-            : "const summary = null"
-        let errorCleanup = assistantExcerptsEnabled ? "\n            latestResponses.delete(sessionID)" : ""
-        let deletionCleanup = assistantExcerptsEnabled ? "\n            latestResponses.delete(sessionID)" : ""
 
         return """
         // \(NotchBotIntegrationFiles.generatedMarker). Do not edit.
@@ -30,7 +23,6 @@ public enum OpenCodePlugin {
           "session.error",
         ])
         let sendQueue = Promise.resolve()
-        \(excerptStorage)
         function bounded(value, maximum) {
           if (typeof value !== "string" || value.length === 0) return null
           return new TextEncoder().encode(value).length <= maximum ? value : null
@@ -125,7 +117,7 @@ public enum OpenCodePlugin {
           return patterns.some((pattern) => permissionText(pattern) === context) ? null : context
         }
 
-        function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, summary, label, request) {
+        function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, label, request) {
           sessionID = identifier(sessionID)
           if (!sessionID) return
           parentSessionID = identifier(parentSessionID)
@@ -137,7 +129,6 @@ public enum OpenCodePlugin {
             cwd: bounded(directory, 1024),
           }
           if (parentSessionID && parentSessionID !== sessionID) payload.parent_session_id = parentSessionID
-          if (summary) payload.last_assistant_message = summary
           if (label) payload.task_label = label
           if (request) {
             payload.request_id = request.id
@@ -158,18 +149,18 @@ public enum OpenCodePlugin {
 
         export const NotchBot = async ({ client, directory, worktree, project }) => {
           const fallbackTaskLabel = taskLabel(project?.name) ?? taskLabel(basename(worktree)) ?? taskLabel(basename(directory)) ?? "OpenCode"
-          const sendEvent = (kind, sessionID, reason, expiresAfter, summary) =>
-            send(kind, sessionID, sessionParents.get(sessionID), reason, directory, expiresAfter, summary, taskLabels.get(sessionID) ?? fallbackTaskLabel)
+          const sendEvent = (kind, sessionID, reason, expiresAfter) =>
+            send(kind, sessionID, sessionParents.get(sessionID), reason, directory, expiresAfter, taskLabels.get(sessionID) ?? fallbackTaskLabel)
           const sendWorking = (sessionID) => {
             completedSessions.delete(sessionID)
-            sendEvent("working", sessionID, null, null, null)
+            sendEvent("working", sessionID, null, null)
           }
-          const sendCompletion = (sessionID, summary) => {
+          const sendCompletion = (sessionID) => {
             if (sessionParents.get(sessionID)) {
-              sendEvent("cleared", sessionID, null, null, summary)
+              sendEvent("cleared", sessionID, null, null)
             } else if (!completedSessions.has(sessionID)) {
               addBounded(completedSessions, sessionID)
-              sendEvent("attention", sessionID, "OpenCode finished working", null, summary)
+              sendEvent("attention", sessionID, "OpenCode finished working", null)
             }
           }
           const resolveParentSessionID = async (sessionID, info) => {
@@ -212,7 +203,6 @@ public enum OpenCodePlugin {
                 null,
                 directory,
                 null,
-                null,
                 taskLabels.get(sessionID) ?? fallbackTaskLabel,
                 { id: requestID, kind, state: "resolved" },
               )
@@ -230,7 +220,6 @@ public enum OpenCodePlugin {
                 sessionParents.get(sessionID),
                 "OpenCode needs permission",
                 directory,
-                null,
                 null,
                 taskLabels.get(sessionID) ?? fallbackTaskLabel,
                 { id: requestID, kind: "permission", state: "opened" },
@@ -266,7 +255,6 @@ public enum OpenCodePlugin {
                     "OpenCode needs permission",
                     directory,
                     null,
-                    null,
                     taskLabels.get(sessionID) ?? fallbackTaskLabel,
                     { id: requestID, kind: "permission", state: "opened" },
                   )
@@ -294,7 +282,6 @@ public enum OpenCodePlugin {
                   "OpenCode needs permission",
                   directory,
                   null,
-                  null,
                   taskLabels.get(sessionID) ?? fallbackTaskLabel,
                   { id: requestID, kind: "permission", state: "opened" },
                 )
@@ -307,7 +294,6 @@ public enum OpenCodePlugin {
           event: async ({ event }) => {
             const properties = event.properties ?? {}
             const sessionID = identifier(properties.sessionID ?? properties.info?.id)
-        \(eventCapture)
             if (!sessionID) return
 
             if (event.type === "permission.replied" || event.type === "permission.v2.replied") {
@@ -316,9 +302,9 @@ public enum OpenCodePlugin {
             }
             if (event.type === "session.deleted") {
               setBounded(sessionGenerations, sessionID, {})
-              sendEvent("cleared", sessionID, null, null, null)
+              sendEvent("cleared", sessionID, null, null)
               taskLabels.delete(sessionID)
-              sessionParents.delete(sessionID)\(deletionCleanup)
+              sessionParents.delete(sessionID)
               completedSessions.delete(sessionID)
               for (const [key, requestSessionID] of knownRequests) {
                 if (requestSessionID !== sessionID) continue
@@ -349,14 +335,14 @@ public enum OpenCodePlugin {
               if (label) {
                 setBounded(taskLabels, sessionID, label)
               }
-              send("metadata", sessionID, parentSessionID, null, directory, null, null, label)
+              send("metadata", sessionID, parentSessionID, null, directory, null, label)
             }
             if (!sessionParents.has(sessionID)) {
               const parentResolution = resolveParentSessionID(sessionID, properties.info)
               if (immediateAttentionEvents.has(event.type)) {
                 void parentResolution.then((parentSessionID) => {
                   if (parentSessionID) {
-                    send("metadata", sessionID, parentSessionID, null, directory, null, null, taskLabels.get(sessionID) ?? fallbackTaskLabel)
+                    send("metadata", sessionID, parentSessionID, null, directory, null, taskLabels.get(sessionID) ?? fallbackTaskLabel)
                   }
                 })
               } else {
@@ -369,15 +355,13 @@ public enum OpenCodePlugin {
                 if (properties.status?.type === "busy" || properties.status?.type === "retry") {
                   sendWorking(sessionID)
                 } else if (properties.status?.type === "idle") {
-                  \(attentionSummary)
                   await resolveParentSessionID(sessionID, properties.info)
-                  sendCompletion(sessionID, summary)
+                  sendCompletion(sessionID)
                 }
                 break
               case "session.idle": {
-                \(attentionSummary)
                 await resolveParentSessionID(sessionID, properties.info)
-                sendCompletion(sessionID, summary)
+                sendCompletion(sessionID)
                 break
               }
               case "permission.updated":
@@ -385,14 +369,14 @@ public enum OpenCodePlugin {
               case "permission.v2.asked": {
                 const requestID = nativeRequestID(properties)
                 if (!requestID) {
-                  sendEvent("attention", sessionID, "OpenCode needs permission", null, null)
+                  sendEvent("attention", sessionID, "OpenCode needs permission", null)
                   break
                 }
                 const key = requestKey(sessionID, "permission", requestID)
                 if (resolvedRequests.has(key)) break
                 if (knownRequests.has(key)) break
                 if (knownRequests.size >= 256) {
-                  sendEvent("attention", sessionID, "OpenCode needs permission", null, null)
+                  sendEvent("attention", sessionID, "OpenCode needs permission", null)
                   break
                 }
                 knownRequests.set(key, sessionID)
@@ -403,14 +387,14 @@ public enum OpenCodePlugin {
               case "question.v2.asked": {
                 const requestID = nativeRequestID(properties)
                 if (!requestID) {
-                  sendEvent("attention", sessionID, "OpenCode has a question", null, null)
+                  sendEvent("attention", sessionID, "OpenCode has a question", null)
                   break
                 }
                 const key = requestKey(sessionID, "question", requestID)
                 if (resolvedRequests.has(key)) break
                 if (knownRequests.has(key)) break
                 if (knownRequests.size >= 256) {
-                  sendEvent("attention", sessionID, "OpenCode has a question", null, null)
+                  sendEvent("attention", sessionID, "OpenCode has a question", null)
                   break
                 }
                 knownRequests.set(key, sessionID)
@@ -421,14 +405,13 @@ public enum OpenCodePlugin {
                   "OpenCode has a question",
                   directory,
                   null,
-                  null,
                   taskLabels.get(sessionID) ?? fallbackTaskLabel,
                   { id: requestID, kind: "question", state: "opened" },
                 )
                 break
               }
               case "session.error":
-                sendEvent("attention", sessionID, "OpenCode encountered an error", null, null)\(errorCleanup)
+                sendEvent("attention", sessionID, "OpenCode encountered an error", null)
                 break
             }
           },
@@ -455,8 +438,9 @@ public enum OpenCodePlugin {
 
     public static func isLegacyV01(_ contents: String) -> Bool {
         contents.hasPrefix("// Generated by NotchBot. Remove this file")
-            && contents.contains("const latestResponses = new Map()")
+            && contents.contains("export const NotchBot")
             && contents.contains("Bun.spawn(args")
+            && contents.contains("process.unref()")
             && contents.contains("--source\", \"opencode")
     }
 
@@ -472,35 +456,4 @@ public enum OpenCodePlugin {
             == Substring("// \(marker). Do not edit.")
     }
 
-    private static let enabledExcerptStorage = """
-
-        const messageSessions = new Map()
-        const latestResponses = new Map()
-
-        function excerpt(value) {
-          if (typeof value !== "string") return null
-          const normalized = value.replace(/\\s+/g, " ").trim()
-          return normalized.length > 240 ? normalized.slice(0, 237).trimEnd() + "..." : normalized
-        }
-
-        function takeResponse(sessionID) {
-          const response = latestResponses.get(sessionID) ?? null
-          latestResponses.delete(sessionID)
-          return response
-        }
-    """
-
-    private static let enabledEventCapture = """
-
-            if (event.type === "message.updated" && properties.info?.role === "assistant") {
-              const messageID = identifier(properties.info.id)
-              const messageSessionID = identifier(properties.info.sessionID)
-              if (messageID && messageSessionID) setBounded(messageSessions, messageID, messageSessionID)
-            }
-            if (event.type === "message.part.updated" && properties.part?.type === "text") {
-              const partSessionID = messageSessions.get(identifier(properties.part.messageID))
-              const response = excerpt(properties.part.text)
-              if (partSessionID && response) setBounded(latestResponses, partSessionID, response)
-            }
-    """
 }

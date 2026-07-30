@@ -262,18 +262,16 @@ import Testing
     #expect(reducer.sessionCount == 1)
 }
 
-@Test func summaryRetentionExpiresOldSummaries() {
-    let start = Date(timeIntervalSince1970: 1_000)
-    var store = AgentSummaryStore()
-    store.apply(AgentEvent(
-        source: .claude,
-        kind: .attention,
-        sessionID: "one",
-        timestamp: start,
-        summary: "Finished"
-    ))
+@Test func legacyResponseSummaryIsIgnoredDuringDecoding() throws {
+    let event = AgentEvent(source: .claude, kind: .working, sessionID: "one")
+    var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(event)) as? [String: Any])
+    object["summary"] = "private legacy response"
+    let legacyData = try JSONSerialization.data(withJSONObject: object)
 
-    #expect(store.removeLatest(olderThan: start.addingTimeInterval(-1))?.text == "Finished")
-    #expect(store.removeLatest(olderThan: start.addingTimeInterval(1)) == nil)
-    #expect(store.latest == nil)
+    let decoded = try JSONDecoder().decode(AgentEvent.self, from: legacyData)
+    try AgentEventValidator.validate(decoded)
+    let encodedObject = try #require(
+        JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any]
+    )
+    #expect(encodedObject["summary"] == nil)
 }

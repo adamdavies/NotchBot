@@ -85,7 +85,6 @@ public struct AgentEvent: Codable, Equatable, Sendable {
     public let terminalProcessID: Int32?
     public let reason: String?
     public let expiresAfter: TimeInterval?
-    public let summary: String?
     public let taskLabel: String?
     public let permission: AgentPermissionRequest?
     public let request: AgentRequestUpdate?
@@ -101,7 +100,6 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         terminalProcessID: Int32? = nil,
         reason: String? = nil,
         expiresAfter: TimeInterval? = nil,
-        summary: String? = nil,
         taskLabel: String? = nil,
         permission: AgentPermissionRequest? = nil,
         request: AgentRequestUpdate? = nil
@@ -117,7 +115,6 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.terminalProcessID = terminalProcessID
         self.reason = reason
         self.expiresAfter = expiresAfter
-        self.summary = summary
         self.taskLabel = AgentTaskLabel.normalized(taskLabel)
         self.permission = permission
         self.request = request
@@ -179,7 +176,6 @@ public enum AgentEventValidator {
         try check(event.workingDirectory, name: "workingDirectory", maximumBytes: 1_024)
         try check(event.terminalBundleIdentifier, name: "terminalBundleIdentifier", maximumBytes: 255)
         try check(event.reason, name: "reason", maximumBytes: 256)
-        try check(event.summary, name: "summary", maximumBytes: 1_024)
         try check(event.taskLabel, name: "taskLabel", maximumBytes: AgentTaskLabel.maximumBytes)
         if let taskLabel = event.taskLabel,
            taskLabel.count > AgentTaskLabel.maximumCharacters || AgentTaskLabel.normalized(taskLabel) != taskLabel {
@@ -263,61 +259,5 @@ public enum AgentTaskLabel {
             result = candidate
         }
         return result.isEmpty ? nil : result
-    }
-}
-
-public enum AgentSummaryText {
-    public static func excerpt(from text: String, limit: Int = 240) -> String? {
-        let normalized = text
-            .split(whereSeparator: { $0.isWhitespace })
-            .joined(separator: " ")
-        guard !normalized.isEmpty, limit > 0 else { return nil }
-        guard normalized.count > limit else { return normalized }
-
-        let end = normalized.index(normalized.startIndex, offsetBy: max(1, limit - 3))
-        return String(normalized[..<end]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
-    }
-}
-
-public struct LatestAgentSummary: Equatable, Sendable {
-    public let source: AgentSource
-    public let text: String
-    public let workingDirectory: String?
-    public let updatedAt: Date
-
-    public var projectName: String? {
-        workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent }
-    }
-}
-
-public struct AgentSummaryStore: Sendable {
-    public private(set) var latest: LatestAgentSummary?
-
-    public init() {}
-
-    @discardableResult
-    public mutating func apply(_ event: AgentEvent) -> LatestAgentSummary? {
-        guard
-            let text = event.summary.flatMap({ AgentSummaryText.excerpt(from: $0) }),
-            latest == nil || event.timestamp >= latest!.updatedAt
-        else {
-            return latest
-        }
-
-        latest = LatestAgentSummary(
-            source: event.source,
-            text: text,
-            workingDirectory: event.workingDirectory,
-            updatedAt: event.timestamp
-        )
-        return latest
-    }
-
-    @discardableResult
-    public mutating func removeLatest(olderThan cutoff: Date) -> LatestAgentSummary? {
-        if let latest, latest.updatedAt < cutoff {
-            self.latest = nil
-        }
-        return latest
     }
 }

@@ -13,7 +13,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        model.setResponseExcerptsEnabled(integrations.assistantExcerptsEnabled)
         model.refreshNotificationStatus()
         panelController = NotchPanelController(
             model: model,
@@ -99,21 +98,7 @@ private struct NotchBotMenu: View {
                 }
                 Button("Remove Integrations") {
                     integrations.uninstall()
-                    model.clearSummary()
                 }
-                Toggle(
-                    "Include Response Excerpts",
-                    isOn: Binding(
-                        get: { integrations.assistantExcerptsEnabled },
-                        set: { enabled in
-                            integrations.setAssistantExcerptsEnabled(enabled)
-                            model.setResponseExcerptsEnabled(integrations.assistantExcerptsEnabled)
-                        }
-                    )
-                )
-                Text("Off by default. Running agent sessions may need restarting after changes.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 notificationButton
                 Button(integrations.launchesAtLogin ? "Disable Launch at Login" : "Enable Launch at Login") {
                     integrations.toggleLaunchAtLogin()
