@@ -4,6 +4,7 @@ public enum NotchCharacter: String, CaseIterable, Identifiable, Sendable {
     case retro
     case blob
     case orb
+    case cat
 
     public var id: String { rawValue }
 
@@ -12,6 +13,7 @@ public enum NotchCharacter: String, CaseIterable, Identifiable, Sendable {
         case .retro: "Retro Bot"
         case .blob: "Blob Bot"
         case .orb: "Orb Bot"
+        case .cat: "Cat Bot"
         }
     }
 }

@@ -24,7 +24,7 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 
 - Notch-aware, always-on-top AppKit panel across Spaces and full-screen apps
 - Automatic, per-display, and all-display placement, including a menu-bar-height synthetic notch for clamshell mode and external displays
-- Selectable **Retro Bot**, **Blob Bot**, and **Orb Bot** characters, with Retro Bot as the default
+- Selectable **Retro Bot**, **Blob Bot**, **Orb Bot**, and **Cat Bot** characters, with Retro Bot as the default
 - A fixed robot menu-bar icon that remains consistent when the notch character changes
 - Character and display preference persistence in `UserDefaults`, storing a validated character identifier and either a display mode or system display UUID
 - Concurrent session tracking with attention taking priority over working activity

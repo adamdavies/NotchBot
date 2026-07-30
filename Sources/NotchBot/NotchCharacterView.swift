@@ -5,16 +5,189 @@ struct NotchCharacterView: View {
     let character: NotchCharacter
     let state: RobotState
     let date: Date
+    let frameIndex: Int
 
     var body: some View {
         switch character {
         case .retro:
-            EmptyView()
+            Image(nsImage: RobotAtlas.shared.frame(state: state, index: frameIndex))
+                .interpolation(.none)
+                .resizable()
+                .offset(y: jumpOffset)
         case .blob:
             BlobCharacter(state: state, date: date)
         case .orb:
             OrbCharacter(state: state, date: date)
+        case .cat:
+            CatCharacter(state: state, date: date)
         }
+    }
+
+    private var jumpOffset: CGFloat {
+        guard state == .attention else { return 0 }
+        let offsets: [CGFloat] = [2, 1, -1, -3, -4, -3, -1, 1]
+        return offsets[Int(date.timeIntervalSinceReferenceDate * 8) % offsets.count]
+    }
+}
+
+private struct CatCharacter: View {
+    let state: RobotState
+    let date: Date
+
+    private var phase: Double { date.timeIntervalSinceReferenceDate }
+
+    var body: some View {
+        switch state {
+        case .idle:
+            sleepingCat
+        case .working:
+            activeCat
+        case .attention:
+            attentionCat
+        }
+    }
+
+    private var sleepingCat: some View {
+        ZStack {
+            CatTail()
+                .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 10, height: 9)
+                .offset(x: 9, y: -1)
+
+            UnevenRoundedRectangle(
+                topLeadingRadius: 8,
+                bottomLeadingRadius: 7,
+                bottomTrailingRadius: 8,
+                topTrailingRadius: 7
+            )
+            .fill(.white)
+            .frame(width: 21, height: 11)
+            .offset(y: 3)
+
+            CatEars()
+                .fill(.white)
+                .frame(width: 13, height: 7)
+                .offset(x: -4, y: -5)
+
+            CatFace(sleeping: true)
+                .offset(x: -3, y: 2)
+
+            SleepMarks(phase: phase)
+                .offset(x: 9, y: -10)
+        }
+        .offset(y: CGFloat(sin(phase * 2) * 0.5))
+    }
+
+    private var activeCat: some View {
+        ZStack {
+            CatTail()
+                .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 10, height: 11)
+                .rotationEffect(.degrees(sin(phase * 6) * 12), anchor: .bottomLeading)
+                .offset(x: 9, y: 2)
+
+            CatEars()
+                .fill(.white)
+                .frame(width: 16, height: 8)
+                .offset(y: -7)
+
+            UnevenRoundedRectangle(
+                topLeadingRadius: 8,
+                bottomLeadingRadius: 8,
+                bottomTrailingRadius: 9,
+                topTrailingRadius: 8
+            )
+            .fill(.white)
+            .frame(width: 18, height: 16)
+            .offset(y: 2)
+
+            CatFace(sleeping: false)
+                .offset(y: -1)
+        }
+        .scaleEffect(x: 1 - squash * 0.08, y: 1 + squash * 0.1)
+    }
+
+    private var attentionCat: some View {
+        ZStack {
+            CatTail()
+                .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 10, height: 11)
+                .rotationEffect(.degrees(sin(phase * 10) * 16), anchor: .bottomLeading)
+                .offset(x: 9, y: 3)
+
+            WavingArm(phase: phase)
+                .offset(x: 9.5, y: 1)
+
+            CatEars()
+                .fill(.white)
+                .frame(width: 16, height: 8)
+                .offset(y: -7)
+
+            UnevenRoundedRectangle(
+                topLeadingRadius: 8,
+                bottomLeadingRadius: 8,
+                bottomTrailingRadius: 9,
+                topTrailingRadius: 8
+            )
+            .fill(.white)
+            .frame(width: 18, height: 16)
+            .offset(y: 2)
+
+            CatFace(sleeping: false)
+                .offset(y: -1)
+        }
+        .rotationEffect(.degrees(-8))
+    }
+
+    private var squash: CGFloat {
+        CGFloat(sin(phase * 8))
+    }
+}
+
+private struct CatFace: View {
+    let sleeping: Bool
+
+    var body: some View {
+        ZStack {
+            HStack(spacing: 4) {
+                Capsule().frame(width: 3, height: sleeping ? 1 : 4)
+                Capsule().frame(width: 3, height: sleeping ? 1 : 4)
+            }
+            .offset(y: -1)
+
+            Circle()
+                .frame(width: 2, height: 2)
+                .offset(y: 3)
+        }
+        .foregroundStyle(Color(red: 0.05, green: 0.05, blue: 0.06))
+    }
+}
+
+private struct CatEars: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + 1, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + 3.5, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.midX - 1, y: rect.maxY))
+        path.closeSubpath()
+        path.move(to: CGPoint(x: rect.midX + 1, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX - 3.5, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - 1, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct CatTail: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY + 1),
+            control1: CGPoint(x: rect.maxX * 0.55, y: rect.maxY),
+            control2: CGPoint(x: rect.maxX, y: rect.midY)
+        )
+        return path
     }
 }
 

@@ -14,6 +14,9 @@ import Testing
 
     NotchCharacterPreference.save(.orb, to: defaults)
     #expect(NotchCharacterPreference.load(from: defaults) == .orb)
+
+    NotchCharacterPreference.save(.cat, to: defaults)
+    #expect(NotchCharacterPreference.load(from: defaults) == .cat)
 }
 
 @Test func invalidCharacterPreferenceFallsBackToRetro() throws {
@@ -23,5 +26,5 @@ import Testing
 
     defaults.set("file:///tmp/untrusted-character", forKey: NotchCharacterPreference.defaultsKey)
     #expect(NotchCharacterPreference.load(from: defaults) == .retro)
-    #expect(NotchCharacter.allCases.map(\.displayName) == ["Retro Bot", "Blob Bot", "Orb Bot"])
+    #expect(NotchCharacter.allCases.map(\.displayName) == ["Retro Bot", "Blob Bot", "Orb Bot", "Cat Bot"])
 }

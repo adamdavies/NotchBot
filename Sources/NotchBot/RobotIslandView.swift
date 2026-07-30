@@ -41,20 +41,13 @@ struct RobotIslandView: View {
                             .frame(width: 34, height: 34)
                             .scaleEffect(0.9 + pulse * 0.12)
                     }
-                    if appearance.character == .retro {
-                        Image(nsImage: RobotAtlas.shared.frame(state: model.displayedRobotState, index: frame))
-                            .interpolation(.none)
-                            .resizable()
-                            .frame(width: 24, height: 24)
-                            .offset(y: jumpOffset(at: timeline.date))
-                    } else {
-                        NotchCharacterView(
-                            character: appearance.character,
-                            state: model.displayedRobotState,
-                            date: timeline.date
-                        )
-                        .frame(width: 24, height: 24)
-                    }
+                    NotchCharacterView(
+                        character: appearance.character,
+                        state: model.displayedRobotState,
+                        date: timeline.date,
+                        frameIndex: frame
+                    )
+                    .frame(width: 24, height: 24)
                 }
                 .frame(width: 38)
 
@@ -139,12 +132,6 @@ struct RobotIslandView: View {
 
     private func pulseAmount(at date: Date) -> CGFloat {
         CGFloat((sin(date.timeIntervalSinceReferenceDate * .pi * 1.5) + 1) / 2)
-    }
-
-    private func jumpOffset(at date: Date) -> CGFloat {
-        guard model.displayedRobotState == .attention else { return 0 }
-        let offsets: [CGFloat] = [2, 1, -1, -3, -4, -3, -1, 1]
-        return offsets[Int(date.timeIntervalSinceReferenceDate * 8) % offsets.count]
     }
 
     private func sweepAmount(at date: Date) -> (start: CGFloat, end: CGFloat) {
