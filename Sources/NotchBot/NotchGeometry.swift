@@ -5,6 +5,27 @@ struct NotchGeometry {
     let originX: CGFloat
     let width: CGFloat
     let coverageHeight: CGFloat
+    let hasPhysicalNotch: Bool
+
+    static func hasPhysicalNotch(screen: NSScreen) -> Bool {
+        guard
+            let leftArea = screen.auxiliaryTopLeftArea,
+            let rightArea = screen.auxiliaryTopRightArea
+        else {
+            return false
+        }
+        return rightArea.minX > leftArea.maxX
+    }
+
+    static func syntheticCoverageHeight(
+        screenFrame: NSRect,
+        visibleFrame: NSRect,
+        fallbackMenuBarHeight: CGFloat
+    ) -> CGFloat {
+        let reportedMenuBarHeight = max(0, screenFrame.maxY - visibleFrame.maxY)
+        let menuBarHeight = reportedMenuBarHeight > 0 ? reportedMenuBarHeight : fallbackMenuBarHeight
+        return min(max(0, menuBarHeight), screenFrame.height)
+    }
 
     init(screen: NSScreen) {
         screenFrame = screen.frame
@@ -16,6 +37,7 @@ struct NotchGeometry {
             let rightArea = screen.auxiliaryTopRightArea,
             rightArea.minX > leftArea.maxX
         {
+            hasPhysicalNotch = true
             let minX = floor(leftArea.maxX * scale) / scale
             let maxX = ceil(rightArea.minX * scale) / scale
             let reportedHeight = max(
@@ -30,10 +52,14 @@ struct NotchGeometry {
             width = maxX - minX
             coverageHeight = ceil(coverage * scale) / scale + pixel
         } else {
-            let menuBarHeight = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
+            hasPhysicalNotch = false
             width = 160
             originX = screen.frame.midX - width / 2
-            coverageHeight = max(32, menuBarHeight)
+            coverageHeight = Self.syntheticCoverageHeight(
+                screenFrame: screen.frame,
+                visibleFrame: screen.visibleFrame,
+                fallbackMenuBarHeight: NSStatusBar.system.thickness
+            )
         }
     }
 }

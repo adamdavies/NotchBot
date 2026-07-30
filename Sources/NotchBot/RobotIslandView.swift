@@ -4,15 +4,18 @@ import SwiftUI
 struct RobotIslandView: View {
     @ObservedObject var model: ActivityModel
     @ObservedObject var appearance: AppearanceModel
+    let maximumIslandHeight: CGFloat?
     let onHoverChanged: (Bool) -> Void
 
     init(
         model: ActivityModel,
         appearance: AppearanceModel,
+        maximumIslandHeight: CGFloat? = nil,
         onHoverChanged: @escaping (Bool) -> Void
     ) {
         self.model = model
         self.appearance = appearance
+        self.maximumIslandHeight = maximumIslandHeight
         self.onHoverChanged = onHoverChanged
     }
 
@@ -116,6 +119,8 @@ struct RobotIslandView: View {
                 model.focusPrimaryTerminal()
             }
             .onHover(perform: onHoverChanged)
+            .frame(height: maximumIslandHeight, alignment: .top)
+            .clipped()
             .padding(.bottom, 6)
         }
     }

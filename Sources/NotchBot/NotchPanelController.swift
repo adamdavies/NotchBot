@@ -4,17 +4,75 @@ import SwiftUI
 
 @MainActor
 final class NotchPanelController {
+    private let model: ActivityModel
+    private let appearance: AppearanceModel
+    private let displaySelection: DisplaySelectionModel
+    private var displayPanels: [String: DisplayPanelController] = [:]
+    private var cancellables: Set<AnyCancellable> = []
+    private var isShown = false
+
+    init(
+        model: ActivityModel,
+        appearance: AppearanceModel,
+        displaySelection: DisplaySelectionModel
+    ) {
+        self.model = model
+        self.appearance = appearance
+        self.displaySelection = displaySelection
+
+        displaySelection.$selection
+            .combineLatest(displaySelection.$screenRevision)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in
+                self?.reconcilePanels()
+            }
+            .store(in: &cancellables)
+    }
+
+    func show() {
+        isShown = true
+        reconcilePanels()
+    }
+
+    private func reconcilePanels() {
+        guard isShown else { return }
+        let targets = displaySelection.resolvedTargets()
+        let targetIDs = Set(targets.map(\.id))
+
+        let removedIDs = displayPanels.keys.filter { !targetIDs.contains($0) }
+        for identifier in removedIDs {
+            displayPanels.removeValue(forKey: identifier)?.close()
+        }
+
+        for target in targets {
+            if let controller = displayPanels[target.id] {
+                controller.position(on: target.screen)
+            } else {
+                let controller = DisplayPanelController(model: model, appearance: appearance)
+                displayPanels[target.id] = controller
+                controller.show(on: target.screen)
+            }
+        }
+    }
+}
+
+@MainActor
+private final class DisplayPanelController {
     private let panel: NSPanel
     private let summaryPanel: NSPanel
     private var mainPanelHovered = false
     private var summaryPanelHovered = false
     private var hoverTask: Task<Void, Never>?
     private var summaryFrame = NSRect.zero
+    private var geometry: NotchGeometry?
+    private var maximumIslandHeight: CGFloat?
     private var cancellables: Set<AnyCancellable> = []
     private let model: ActivityModel
+    private let appearance: AppearanceModel
 
     init(model: ActivityModel, appearance: AppearanceModel) {
         self.model = model
+        self.appearance = appearance
         panel = NSPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -27,23 +85,8 @@ final class NotchPanelController {
             backing: .buffered,
             defer: false
         )
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.hasShadow = true
-        panel.level = .screenSaver
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.hidesOnDeactivate = false
-        panel.isMovable = false
-        panel.acceptsMouseMovedEvents = true
-        summaryPanel.backgroundColor = .clear
-        summaryPanel.isOpaque = false
-        summaryPanel.hasShadow = true
-        summaryPanel.level = .screenSaver
-        summaryPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        summaryPanel.hidesOnDeactivate = false
-        summaryPanel.isMovable = false
-        summaryPanel.acceptsMouseMovedEvents = true
-        summaryPanel.ignoresMouseEvents = false
+        configure(panel)
+        configure(summaryPanel)
         summaryPanel.alphaValue = 0
 
         panel.contentView = NSHostingView(
@@ -70,30 +113,33 @@ final class NotchPanelController {
                 }
             }
             .store(in: &cancellables)
-
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didChangeScreenParametersNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.positionPanel()
-            }
-        }
     }
 
-    func show() {
-        positionPanel()
+    func show(on screen: NSScreen) {
+        position(on: screen)
         panel.orderFrontRegardless()
     }
 
-    private func positionPanel() {
-        guard let screen = preferredScreen else { return }
+    func position(on screen: NSScreen) {
         let geometry = NotchGeometry(screen: screen)
+        self.geometry = geometry
+        let updatedMaximumHeight = geometry.hasPhysicalNotch ? nil : geometry.coverageHeight
+        if maximumIslandHeight != updatedMaximumHeight {
+            maximumIslandHeight = updatedMaximumHeight
+            panel.contentView = NSHostingView(
+                rootView: RobotIslandView(
+                    model: model,
+                    appearance: appearance,
+                    maximumIslandHeight: updatedMaximumHeight
+                ) { [weak self] hovering in
+                    self?.setMainPanelHovered(hovering)
+                }
+            )
+        }
         let screenFrame = geometry.screenFrame
-
         let extensionWidth: CGFloat = 38
         let glowSpace: CGFloat = 6
+
         panel.setFrame(
             NSRect(
                 x: geometry.originX - extensionWidth,
@@ -103,8 +149,25 @@ final class NotchPanelController {
             ),
             display: true
         )
+        updateDetailFrame()
+    }
 
-        updateDetailFrame(screen: screen, geometry: geometry)
+    func close() {
+        hoverTask?.cancel()
+        mainPanelHovered = false
+        forceHideDetailPanel()
+        panel.orderOut(nil)
+    }
+
+    private func configure(_ panel: NSPanel) {
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.hidesOnDeactivate = false
+        panel.isMovable = false
+        panel.acceptsMouseMovedEvents = true
     }
 
     private func setMainPanelHovered(_ hovering: Bool) {
@@ -188,16 +251,13 @@ final class NotchPanelController {
     }
 
     private func updateDetailFrame() {
-        guard let screen = preferredScreen else { return }
-        updateDetailFrame(screen: screen, geometry: NotchGeometry(screen: screen))
-    }
-
-    private func updateDetailFrame(screen: NSScreen, geometry: NotchGeometry) {
+        guard let geometry else { return }
         let size = detailSize
         let screenFrame = geometry.screenFrame
         let cardTop = screenFrame.maxY - geometry.coverageHeight - 4
+        let notchCenterX = geometry.originX + geometry.width / 2
         let cardX = min(
-            max(screenFrame.minX + 8, screenFrame.midX - size.width / 2),
+            max(screenFrame.minX + 8, notchCenterX - size.width / 2),
             screenFrame.maxX - size.width - 8
         )
         summaryFrame = NSRect(
@@ -218,9 +278,5 @@ final class NotchPanelController {
         summaryPanel.contentView?.layer?.removeAllAnimations()
         summaryPanel.alphaValue = 0
         summaryPanel.orderOut(nil)
-    }
-
-    private var preferredScreen: NSScreen? {
-        NSScreen.screens.first(where: { $0.auxiliaryTopLeftArea != nil }) ?? NSScreen.main ?? NSScreen.screens.first
     }
 }

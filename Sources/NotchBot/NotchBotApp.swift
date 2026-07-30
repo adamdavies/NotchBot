@@ -6,6 +6,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = ActivityModel()
     let appearance = AppearanceModel()
+    let displaySelection = DisplaySelectionModel()
     let integrations = IntegrationInstaller()
     private let eventServer = EventServer()
     private var panelController: NotchPanelController?
@@ -14,7 +15,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         model.setResponseExcerptsEnabled(integrations.assistantExcerptsEnabled)
         model.refreshNotificationStatus()
-        panelController = NotchPanelController(model: model, appearance: appearance)
+        panelController = NotchPanelController(
+            model: model,
+            appearance: appearance,
+            displaySelection: displaySelection
+        )
         panelController?.show()
 
         do {
@@ -43,6 +48,7 @@ struct NotchBotApp: App {
             NotchBotMenu(
                 model: appDelegate.model,
                 appearance: appDelegate.appearance,
+                displaySelection: appDelegate.displaySelection,
                 integrations: appDelegate.integrations
             )
         } label: {
@@ -57,6 +63,7 @@ struct NotchBotApp: App {
 private struct NotchBotMenu: View {
     @ObservedObject var model: ActivityModel
     @ObservedObject var appearance: AppearanceModel
+    @ObservedObject var displaySelection: DisplaySelectionModel
     @ObservedObject var integrations: IntegrationInstaller
 
     var body: some View {
@@ -69,6 +76,16 @@ private struct NotchBotMenu: View {
                 Picker("Character", selection: $appearance.character) {
                     ForEach(NotchCharacter.allCases) { character in
                         Text(character.displayName).tag(character)
+                    }
+                }
+                Picker("Display", selection: $displaySelection.selection) {
+                    Text("Automatic").tag(DisplaySelection.automatic)
+                    Text("All Displays").tag(DisplaySelection.all)
+                    ForEach(displaySelection.options) { display in
+                        Text(display.name).tag(DisplaySelection.display(display.id))
+                    }
+                    if displaySelection.hasUnavailableSelection {
+                        Text("Unavailable Display").tag(displaySelection.selection)
                     }
                 }
                 Divider()

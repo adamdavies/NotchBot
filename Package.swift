@@ -33,6 +33,10 @@ let package = Package(
             name: "NotchBotIntegrationCoreTests",
             dependencies: ["NotchBotIntegrationCore"]
         ),
+        .testTarget(
+            name: "NotchBotTests",
+            dependencies: ["NotchBot"]
+        ),
     ],
     swiftLanguageModes: [.v5]
 )
