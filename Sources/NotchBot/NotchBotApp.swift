@@ -71,6 +71,9 @@ private struct NotchBotMenu: View {
                     .font(.headline)
                 Text(statusText)
                     .foregroundStyle(.secondary)
+                Text("Today: \(model.coolnessStatusText)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Divider()
                 Picker("Character", selection: $appearance.character) {
                     ForEach(NotchCharacter.allCases) { character in
@@ -104,11 +107,35 @@ private struct NotchBotMenu: View {
                     integrations.toggleLaunchAtLogin()
                 }
                 Divider()
-                Button("Preview Idle") { model.preview(.idle) }
-                Button("Preview Working") { model.preview(.working) }
-                Button("Preview Attention") { model.preview(.attention) }
-                if model.isPreviewing {
-                    Button("Stop Preview") { model.cancelPreview() }
+                Menu("Debug") {
+                    Menu("State Preview") {
+                        debugOption("Live", selected: model.previewState == nil) {
+                            model.setPreviewState(nil)
+                        }
+                        debugOption("Idle", selected: model.previewState == .idle) {
+                            model.setPreviewState(.idle)
+                        }
+                        debugOption("Working", selected: model.previewState == .working) {
+                            model.setPreviewState(.working)
+                        }
+                        debugOption("Needs Input", selected: model.previewState == .attention) {
+                            model.setPreviewState(.attention)
+                        }
+                    }
+                    Menu("Coolness Tier") {
+                        debugOption("Live", selected: model.previewCoolnessTier == nil) {
+                            model.setPreviewCoolnessTier(nil)
+                        }
+                        ForEach(CoolnessTier.allCases) { tier in
+                            debugOption(tier.displayName, selected: model.previewCoolnessTier == tier) {
+                                model.setPreviewCoolnessTier(tier)
+                            }
+                        }
+                    }
+                    if model.isPreviewing {
+                        Divider()
+                        Button("Stop Debug Preview") { model.cancelPreview() }
+                    }
                 }
                 Divider()
                 Button("Quit NotchBot") { NSApp.terminate(nil) }
@@ -119,12 +146,37 @@ private struct NotchBotMenu: View {
 
     private var statusText: String {
         if model.isPreviewing {
-            return "Previewing \(model.displayedRobotState.rawValue)"
+            let state = model.previewState.map(stateName) ?? "Live State"
+            let tier = model.previewCoolnessTier?.displayName ?? "Live Tier"
+            return "Debug: \(state) · \(tier)"
         }
         return switch model.robotState {
         case .idle: "No active agents"
         case .working: "An agent is working"
         case .attention: "An agent needs attention"
+        }
+    }
+
+    private func stateName(_ state: RobotState) -> String {
+        switch state {
+        case .idle: "Idle"
+        case .working: "Working"
+        case .attention: "Needs Input"
+        }
+    }
+
+    @ViewBuilder
+    private func debugOption(
+        _ title: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            if selected {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
         }
     }
 

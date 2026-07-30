@@ -6,14 +6,35 @@ struct NotchCharacterView: View {
     let state: RobotState
     let date: Date
     let frameIndex: Int
+    let coolnessTier: CoolnessTier
 
     var body: some View {
+        ZStack {
+            if coolnessTier >= .glow {
+                CoolnessPlate(date: date)
+            }
+
+            ZStack {
+                characterBody
+                CharacterAccessoryView(
+                    tier: coolnessTier,
+                    character: character,
+                    state: state
+                )
+            }
+            .scaleEffect(x: characterScale.width, y: characterScale.height)
+            .rotationEffect(characterRotation)
+            .offset(y: characterOffsetY)
+        }
+    }
+
+    @ViewBuilder
+    private var characterBody: some View {
         switch character {
         case .retro:
             Image(nsImage: RobotAtlas.shared.frame(state: state, index: frameIndex))
                 .interpolation(.none)
                 .resizable()
-                .offset(y: jumpOffset)
         case .blob:
             BlobCharacter(state: state, date: date)
         case .orb:
@@ -23,10 +44,215 @@ struct NotchCharacterView: View {
         }
     }
 
-    private var jumpOffset: CGFloat {
-        guard state == .attention else { return 0 }
-        let offsets: [CGFloat] = [2, 1, -1, -3, -4, -3, -1, 1]
-        return offsets[Int(date.timeIntervalSinceReferenceDate * 8) % offsets.count]
+    private var phase: Double {
+        date.timeIntervalSinceReferenceDate
+    }
+
+    private var characterScale: CGSize {
+        let squash: CGFloat
+        switch character {
+        case .orb:
+            let speed = state == .working ? 8.0 : (state == .attention ? 10.0 : 2.0)
+            squash = CGFloat(sin(phase * speed))
+        case .cat where state == .working:
+            squash = CGFloat(sin(phase * 8))
+        default:
+            return CGSize(width: 1, height: 1)
+        }
+        return CGSize(width: 1 - squash * 0.08, height: 1 + squash * 0.1)
+    }
+
+    private var characterRotation: Angle {
+        guard state == .attention else { return .zero }
+        return switch character {
+        case .retro: .zero
+        case .blob, .orb: .degrees(-10)
+        case .cat: .degrees(-8)
+        }
+    }
+
+    private var characterOffsetY: CGFloat {
+        switch character {
+        case .retro where state == .attention:
+            let offsets: [CGFloat] = [2, 1, -1, -3, -4, -3, -1, 1]
+            return offsets[Int(phase * 8) % offsets.count]
+        case .blob:
+            let speed = state == .working ? 8.0 : (state == .attention ? 12.0 : 2.2)
+            let distance = state == .idle ? 0.8 : 1.5
+            return CGFloat(sin(phase * speed) * distance)
+        case .cat where state == .idle:
+            return CGFloat(sin(phase * 2) * 0.5)
+        default:
+            return 0
+        }
+    }
+}
+
+private struct CharacterAccessoryView: View {
+    let tier: CoolnessTier
+    let character: NotchCharacter
+    let state: RobotState
+
+    var body: some View {
+        ZStack {
+            if tier >= .shades {
+                NeonShades()
+                    .offset(shadesOffset)
+            }
+
+            if tier >= .crown {
+                NeonCrown()
+                    .rotationEffect(.degrees(-20))
+                    .offset(crownOffset)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var shadesOffset: CGSize {
+        switch (character, state) {
+        case (.retro, .idle): CGSize(width: -3, height: -2)
+        case (.retro, .working): CGSize(width: 3, height: -3)
+        case (.retro, .attention): CGSize(width: 0, height: -3)
+        case (.blob, _): CGSize(width: 0, height: 0)
+        case (.orb, _): CGSize(width: 0, height: -1)
+        case (.cat, .idle): CGSize(width: -3, height: 1)
+        case (.cat, _): CGSize(width: 0, height: -1)
+        }
+    }
+
+    private var crownOffset: CGSize {
+        switch (character, state) {
+        case (.retro, .attention): CGSize(width: -4, height: -7)
+        case (.blob, .attention): CGSize(width: -4, height: -8)
+        case (.orb, .attention): CGSize(width: -4, height: -8)
+        case (.cat, .attention): CGSize(width: -4, height: -8)
+        case (.retro, _): CGSize(width: -4, height: -11)
+        case (.blob, _): CGSize(width: -4, height: -11)
+        case (.orb, _): CGSize(width: -4, height: -11)
+        case (.cat, .idle): CGSize(width: -5, height: -11)
+        case (.cat, .working): CGSize(width: -4, height: -11)
+        }
+    }
+}
+
+private struct CoolnessPlate: View {
+    let date: Date
+
+    private var pulse: CGFloat {
+        CGFloat((sin(date.timeIntervalSinceReferenceDate * 2.6) + 1) / 2)
+    }
+
+    var body: some View {
+        ZStack {
+            Ellipse()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 0.08, green: 0.82, blue: 1).opacity(0.34 + pulse * 0.18),
+                            Color(red: 0.05, green: 0.45, blue: 0.72).opacity(0.2),
+                            Color.black.opacity(0.75),
+                        ],
+                        center: .center,
+                        startRadius: 1,
+                        endRadius: 13
+                    )
+                )
+                .frame(width: 27, height: 7)
+
+            Ellipse()
+                .fill(Color(red: 0.08, green: 0.9, blue: 1).opacity(0.12 + pulse * 0.1))
+                .frame(width: 19, height: 3)
+
+            Ellipse()
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.2, green: 0.96, blue: 1),
+                            Color(red: 0.16, green: 0.54, blue: 1),
+                            Color(red: 0.2, green: 0.96, blue: 1),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    lineWidth: 1.2
+                )
+                .frame(width: 27, height: 7)
+
+            Ellipse()
+                .trim(from: 0.04, to: 0.46)
+                .stroke(
+                    Color.white.opacity(0.38 + pulse * 0.22),
+                    style: StrokeStyle(lineWidth: 1, lineCap: .round)
+                )
+                .frame(width: 23, height: 5)
+        }
+        .scaleEffect(0.97 + pulse * 0.04)
+        .offset(y: 9)
+        .shadow(
+            color: Color(red: 0.08, green: 0.88, blue: 1).opacity(0.38 + pulse * 0.2),
+            radius: 4,
+            y: 1
+        )
+        .allowsHitTesting(false)
+    }
+}
+
+private struct NeonShades: View {
+    private let lensColor = Color(red: 0.16, green: 0.88, blue: 1)
+    private let frameColor = Color(red: 0.34, green: 0.08, blue: 0.52)
+
+    var body: some View {
+        HStack(spacing: 0) {
+            lens
+            Rectangle()
+                .fill(frameColor)
+                .frame(width: 3, height: 1.5)
+            lens
+        }
+        .frame(width: 15, height: 6)
+    }
+
+    private var lens: some View {
+        RoundedRectangle(cornerRadius: 1.5)
+            .fill(lensColor)
+            .frame(width: 6, height: 5)
+            .overlay {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .stroke(frameColor, lineWidth: 1.5)
+            }
+            .overlay(alignment: .topLeading) {
+                Circle()
+                    .fill(Color(red: 1, green: 0.16, blue: 0.72))
+                    .frame(width: 1.5, height: 1.5)
+                    .padding(1)
+            }
+    }
+}
+
+private struct NeonCrown: View {
+    var body: some View {
+        CrownShape()
+            .fill(Color(red: 1, green: 0.76, blue: 0.02))
+            .frame(width: 13, height: 8)
+            .overlay {
+                CrownShape().stroke(.black.opacity(0.9), lineWidth: 1.4)
+            }
+    }
+}
+
+private struct CrownShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.28))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.28, y: rect.minY + rect.height * 0.55))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - rect.width * 0.28, y: rect.minY + rect.height * 0.55))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.28))
+        path.addLine(to: CGPoint(x: rect.maxX - 1, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + 1, y: rect.maxY))
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -75,7 +301,6 @@ private struct CatCharacter: View {
             SleepMarks(phase: phase)
                 .offset(x: 9, y: -10)
         }
-        .offset(y: CGFloat(sin(phase * 2) * 0.5))
     }
 
     private var activeCat: some View {
@@ -104,7 +329,6 @@ private struct CatCharacter: View {
             CatFace(sleeping: false)
                 .offset(y: -1)
         }
-        .scaleEffect(x: 1 - squash * 0.08, y: 1 + squash * 0.1)
     }
 
     private var attentionCat: some View {
@@ -136,11 +360,6 @@ private struct CatCharacter: View {
             CatFace(sleeping: false)
                 .offset(y: -1)
         }
-        .rotationEffect(.degrees(-8))
-    }
-
-    private var squash: CGFloat {
-        CGFloat(sin(phase * 8))
     }
 }
 
@@ -213,8 +432,6 @@ private struct BlobCharacter: View {
             antenna
             eyes
         }
-        .rotationEffect(state == .attention ? .degrees(-10) : .zero)
-        .offset(y: bob)
     }
 
     private var bodyShape: some View {
@@ -264,11 +481,6 @@ private struct BlobCharacter: View {
             .frame(width: 3, height: isIdle ? 1 : 4)
     }
 
-    private var bob: CGFloat {
-        let speed = state == .working ? 8.0 : (state == .attention ? 12.0 : 2.2)
-        let distance = state == .idle ? 0.8 : 1.5
-        return CGFloat(sin(phase * speed) * distance)
-    }
 }
 
 private struct OrbCharacter: View {
@@ -299,8 +511,6 @@ private struct OrbCharacter: View {
             }
             .offset(y: -1)
         }
-        .scaleEffect(x: stretchX, y: stretchY)
-        .rotationEffect(state == .attention ? .degrees(-10) : .zero)
     }
 
     @ViewBuilder
@@ -320,18 +530,6 @@ private struct OrbCharacter: View {
             )
     }
 
-    private var stretchX: CGFloat {
-        1 - squash * 0.08
-    }
-
-    private var stretchY: CGFloat {
-        1 + squash * 0.1
-    }
-
-    private var squash: CGFloat {
-        let speed = state == .working ? 8.0 : (state == .attention ? 10.0 : 2.0)
-        return CGFloat(sin(phase * speed))
-    }
 }
 
 private struct WavingArm: View {

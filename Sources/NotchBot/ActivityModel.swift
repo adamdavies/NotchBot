@@ -12,15 +12,33 @@ final class ActivityModel: ObservableObject {
     @Published private(set) var activeAgentCount = 0
     @Published private(set) var waitingAgentCount = 0
     @Published private(set) var previewState: RobotState?
+    @Published private(set) var previewCoolnessTier: CoolnessTier?
+    @Published private(set) var dailyCompletionCount: Int
     @Published private(set) var activeSessions: [SessionActivity] = []
     @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
 
     private var reducer = ActivityReducer()
-    private var previewTask: Task<Void, Never>?
+    private var coolnessTracker: DailyCoolnessTracker
     private var expiryTasks: [String: Task<Void, Never>] = [:]
     private var maintenanceTask: Task<Void, Never>?
+    private let defaults: UserDefaults
+    private let calendar: Calendar
+    private var coolnessDay: String
+    private var dailyResetTask: Task<Void, Never>?
+    private var calendarObservers: [NSObjectProtocol] = []
+    private var wakeObserver: NSObjectProtocol?
 
-    init() {
+    init(
+        defaults: UserDefaults = .standard,
+        calendar: Calendar = .autoupdatingCurrent,
+        now: Date = Date()
+    ) {
+        self.defaults = defaults
+        self.calendar = calendar
+        coolnessDay = DailyCoolnessPreference.dayIdentifier(for: now, calendar: calendar)
+        let savedCount = DailyCoolnessPreference.load(from: defaults, now: now, calendar: calendar)
+        dailyCompletionCount = savedCount
+        coolnessTracker = DailyCoolnessTracker(completionCount: savedCount)
         maintenanceTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
@@ -28,11 +46,19 @@ final class ActivityModel: ObservableObject {
                 self?.performMaintenance()
             }
         }
+        scheduleDailyReset(now: now)
+        installDailyResetObservers()
     }
 
     deinit {
         maintenanceTask?.cancel()
-        previewTask?.cancel()
+        dailyResetTask?.cancel()
+        for observer in calendarObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
         for task in expiryTasks.values {
             task.cancel()
         }
@@ -40,6 +66,14 @@ final class ActivityModel: ObservableObject {
 
     var displayedRobotState: RobotState {
         previewState ?? robotState
+    }
+
+    var coolnessTier: CoolnessTier {
+        CoolnessTier(completionCount: dailyCompletionCount)
+    }
+
+    var displayedCoolnessTier: CoolnessTier {
+        previewCoolnessTier ?? coolnessTier
     }
 
     var displayedAgentCount: Int {
@@ -53,10 +87,19 @@ final class ActivityModel: ObservableObject {
     }
 
     var isPreviewing: Bool {
-        previewState != nil
+        previewState != nil || previewCoolnessTier != nil
+    }
+
+    var coolnessStatusText: String {
+        let tier = coolnessTier
+        guard let nextTier = CoolnessTier.allCases.first(where: { $0.threshold > dailyCompletionCount }) else {
+            return "\(dailyCompletionCount) completed runs · \(tier.displayName)"
+        }
+        return "\(dailyCompletionCount) completed runs · \(tier.displayName) · \(nextTier.threshold - dailyCompletionCount) to \(nextTier.displayName)"
     }
 
     func receive(_ event: AgentEvent) {
+        refreshDailyCoolness()
         guard (try? AgentEventValidator.validate(event)) != nil else { return }
         if event.kind == .requestResolved, let identifier = notificationIdentifier(for: event) {
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
@@ -73,6 +116,17 @@ final class ActivityModel: ObservableObject {
         }
         let change = reducer.apply(event)
         publish(change)
+        let isTopLevel = reducer.activity(source: event.source, sessionID: event.sessionID)
+            .map { !$0.isSubagent } ?? (event.parentSessionID == nil)
+        if coolnessTracker.apply(event, isTopLevel: isTopLevel) {
+            dailyCompletionCount = coolnessTracker.completionCount
+            DailyCoolnessPreference.save(
+                completionCount: dailyCompletionCount,
+                to: defaults,
+                now: Date(),
+                calendar: calendar
+            )
+        }
 
         if change.shouldNotify {
             attentionSequence += 1
@@ -83,28 +137,17 @@ final class ActivityModel: ObservableObject {
         }
     }
 
-    func preview(_ state: RobotState) {
-        if previewState == state {
-            cancelPreview()
-            return
-        }
-
-        previewTask?.cancel()
+    func setPreviewState(_ state: RobotState?) {
         previewState = state
-        previewTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: 10_000_000_000)
-            } catch {
-                return
-            }
-            self?.cancelPreview()
-        }
+    }
+
+    func setPreviewCoolnessTier(_ tier: CoolnessTier?) {
+        previewCoolnessTier = tier
     }
 
     func cancelPreview() {
-        previewTask?.cancel()
-        previewTask = nil
         previewState = nil
+        previewCoolnessTier = nil
     }
 
     func focusPrimaryTerminal() {
@@ -262,6 +305,7 @@ final class ActivityModel: ObservableObject {
     }
 
     private func performMaintenance(now: Date = Date()) {
+        refreshDailyCoolness(now: now)
         reducer.removeSessions(olderThan: now.addingTimeInterval(-30 * 60))
         cancelOrphanedExpiryTasks()
         robotState = reducer.state
@@ -269,6 +313,68 @@ final class ActivityModel: ObservableObject {
         activeAgentCount = reducer.activeCount
         waitingAgentCount = reducer.attentionCount
         activeSessions = reducer.activities
+    }
+
+    private func refreshDailyCoolness(now: Date = Date()) {
+        let currentDay = DailyCoolnessPreference.dayIdentifier(for: now, calendar: calendar)
+        guard coolnessDay != currentDay else { return }
+        coolnessDay = currentDay
+        coolnessTracker.reset()
+        dailyCompletionCount = 0
+        DailyCoolnessPreference.save(
+            completionCount: 0,
+            to: defaults,
+            now: now,
+            calendar: calendar
+        )
+    }
+
+    private func scheduleDailyReset(now: Date) {
+        dailyResetTask?.cancel()
+        let startOfToday = calendar.startOfDay(for: now)
+        guard let startOfTomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) else { return }
+        let nanoseconds = UInt64(max(1, startOfTomorrow.timeIntervalSince(now)) * 1_000_000_000)
+        dailyResetTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
+            }
+            guard let self else { return }
+            let resetAt = Date()
+            refreshDailyCoolness(now: resetAt)
+            scheduleDailyReset(now: resetAt)
+        }
+    }
+
+    private func installDailyResetObservers() {
+        let names: [Notification.Name] = [
+            .NSCalendarDayChanged,
+            .NSSystemClockDidChange,
+            .NSSystemTimeZoneDidChange,
+        ]
+        calendarObservers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let now = Date()
+                    self.refreshDailyCoolness(now: now)
+                    self.scheduleDailyReset(now: now)
+                }
+            }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let now = Date()
+                self.refreshDailyCoolness(now: now)
+                self.scheduleDailyReset(now: now)
+            }
+        }
     }
 
     private func publish(_ change: ActivityChange) {

@@ -26,7 +26,7 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 - Automatic, per-display, and all-display placement, including a menu-bar-height synthetic notch for clamshell mode and external displays
 - Selectable **Retro Bot**, **Blob Bot**, **Orb Bot**, and **Cat Bot** characters, with Retro Bot as the default
 - A fixed robot menu-bar icon that remains consistent when the notch character changes
-- Character and display preference persistence in `UserDefaults`, storing a validated character identifier and either a display mode or system display UUID
+- Character, display, and daily coolness persistence in `UserDefaults`, storing validated preferences plus only the local day and aggregate completion count
 - Concurrent session tracking with attention taking priority over working activity
 - Live agent count opposite the robot, with a yellow waiting badge
 - Click the compact notch panel to focus Terminal, iTerm2, Warp, Ghostty, or Kitty
@@ -35,6 +35,7 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 - Permission rows separate the requested scope from bounded native command, path, or resource context and include **Allow Once**, **Always**, and **Decline** controls; Claude's **Always** control appears only for one unambiguous native suggestion
 - Questions, completion, and errors remain presentation-only attention; clicking a permission row or the compact bot focuses the terminal without submitting or hiding the request
 - After a permission response is submitted, its controls disappear while Needs You remains until the provider reports that work resumed
+- Daily coolness tiers at 25, 50, and 100 observed top-level completions add a cumulative cyan isometric glow plate, neon shades, and a gold crown, resetting at local midnight
 - When no sessions are tracked, idle hover shows an empty queue state instead of retaining completed response text
 - Bounded task labels selected from OpenCode session titles or project metadata and Claude Code's existing `session_title`, `agent_type`, or project-directory basename
 - Local Unix datagram transport with no telemetry, analytics, or intentional Internet requests
@@ -48,7 +49,7 @@ swift run NotchBot
 
 Open the menu-bar robot and select **Install Integrations** for a first installation. Select **Update Integrations** after updating the app, then restart all running agent sessions.
 
-Use **Preview Idle**, **Preview Working**, and **Preview Attention** in the menu to inspect animations without running an agent. Previews can be cancelled manually and stop automatically after 10 seconds.
+Use the **Debug** menu to independently preview robot states and coolness tiers without running an agent. Debug previews remain active until stopped and never change persisted daily progress.
 
 ## Manually Test Queue States
 
@@ -181,7 +182,7 @@ Before changing Claude Code settings, NotchBot creates a restrictive transaction
 
 NotchBot is local-only by design. It has no telemetry or analytics and makes no intentional Internet requests. OpenCode and Claude Code have their own network behavior, which is outside NotchBot's control.
 
-The integrations send encrypted, authenticated lifecycle events containing source, session identifier, optional parent-session identifier, working-directory path, terminal identifier, reason, expiry, a bounded task label, and optional permission metadata over the local Unix datagram socket at `~/Library/Application Support/NotchBot/notchbot.sock`. OpenCode hierarchy comes from its session `parentID`; Claude Code hierarchy comes from its documented `agent_id` and parent `session_id` hook fields. OpenCode labels come from its session title or project metadata. Claude Code labels come from the existing `session_title` or `agent_type` hook fields, falling back to the project-directory basename. Outside bounded native permission context, NotchBot does not select prompt fields, transcripts, task subjects, task descriptions, or assistant response text. OpenCode or Claude Code may themselves generate a session title from conversation content before exposing that metadata. Labels are displayed in the hover queue, retained only in process memory, and never written to disk by NotchBot. NotchBot uses the working-directory path to display a project name and focus a terminal; it does not traverse or read arbitrary project files.
+The integrations send encrypted, authenticated lifecycle events containing source, session identifier, optional parent-session identifier, working-directory path, terminal identifier, reason, expiry, a bounded task label, and optional permission metadata over the local Unix datagram socket at `~/Library/Application Support/NotchBot/notchbot.sock`. OpenCode hierarchy comes from its session `parentID`; Claude Code hierarchy comes from its documented `agent_id` and parent `session_id` hook fields. OpenCode labels come from its session title or project metadata. Claude Code labels come from the existing `session_title` or `agent_type` hook fields, falling back to the project-directory basename. Outside bounded native permission context, NotchBot does not select prompt fields, transcripts, task subjects, task descriptions, or assistant response text. OpenCode or Claude Code may themselves generate a session title from conversation content before exposing that metadata. Labels are displayed in the hover queue, retained only in process memory, and never written to disk by NotchBot. Daily coolness persists only a local date identifier and aggregate completion count in `UserDefaults`; source-qualified session identifiers used to suppress duplicate completions remain in memory and are discarded on reset or quit. NotchBot uses the working-directory path to display a project name and focus a terminal; it does not traverse or read arbitrary project files.
 
 Claude Code supplies its hook event JSON to `notchbot-hook` on standard input. The shared decoder accepts bounded lifecycle, task-label, and OpenCode request/permission fields while ignoring other keys; Claude permission handling separately selects bounded native permission fields. Source-specific handling uses `agent_id` only for Claude hierarchy and `parent_session_id` only for OpenCode hierarchy. The helper accepts at most 64 KiB, reading one additional byte only to detect overflow. Prompt, transcript, and response fields can still reach the helper process as part of Claude's raw stdin, but NotchBot does not select, retain, or forward them. The OpenCode plugin does not pass through raw events or assistant messages: it constructs an allowlisted stdin payload containing lifecycle, task-label, request, and bounded permission metadata only.
 

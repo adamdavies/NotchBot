@@ -45,7 +45,8 @@ struct RobotIslandView: View {
                         character: appearance.character,
                         state: model.displayedRobotState,
                         date: timeline.date,
-                        frameIndex: frame
+                        frameIndex: frame,
+                        coolnessTier: model.displayedCoolnessTier
                     )
                     .frame(width: 24, height: 24)
                 }

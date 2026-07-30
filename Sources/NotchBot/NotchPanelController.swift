@@ -101,9 +101,9 @@ private final class DisplayPanelController {
         )
 
         model.$activeSessions
-            .combineLatest(model.$previewState)
+            .combineLatest(model.$previewState, model.$previewCoolnessTier)
             .receive(on: RunLoop.main)
-            .sink { [weak self] _, _ in
+            .sink { [weak self] _, _, _ in
                 guard let self else { return }
                 self.updateDetailFrame()
                 if self.summaryPanel.isVisible, !self.hasDetailContent {
@@ -236,7 +236,7 @@ private final class DisplayPanelController {
     }
 
     private var hasDetailContent: Bool {
-        !model.isPreviewing
+        model.previewState == nil
     }
 
     private var detailSize: NSSize {

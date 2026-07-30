@@ -1,6 +1,6 @@
 import Foundation
 
-public enum RobotState: String, Equatable, Sendable {
+public enum RobotState: String, Equatable, Hashable, Sendable {
     case idle
     case working
     case attention
@@ -72,6 +72,10 @@ public struct ActivityReducer: Sendable {
         guard let parentSessionID = event.parentSessionID else { return true }
         let parentKey = Self.key(source: event.source, sessionID: parentSessionID)
         return latestClearedAt[parentKey].map { event.timestamp > $0 } ?? true
+    }
+
+    public func activity(source: AgentSource, sessionID: String) -> SessionActivity? {
+        sessions[Self.key(source: source, sessionID: sessionID)]
     }
 
     @discardableResult
