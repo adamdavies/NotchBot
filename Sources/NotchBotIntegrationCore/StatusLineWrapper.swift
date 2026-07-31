@@ -20,6 +20,10 @@ public enum StatusLineWrapper {
         shellEscaped(wrapperPath)
     }
 
+    public static func referencesWrapper(_ command: String, atPath wrapperPath: String) -> Bool {
+        command.contains(wrapperPath)
+    }
+
     public static func generate(hookPath: String, existingCommand: String?) -> String {
         let escapedHookPath = shellEscaped(hookPath)
         let header = """

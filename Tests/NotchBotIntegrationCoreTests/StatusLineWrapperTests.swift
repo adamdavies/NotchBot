@@ -40,3 +40,11 @@ import Testing
     #expect(decoded.isOwned)
     #expect(decoded.originalStatusLineJSON == original)
 }
+
+@Test func statusLineWrapperDetectsRecursiveCommands() {
+    let path = "/Users/test/Library/Application Support/NotchBot/bin/notchbot-statusline"
+
+    #expect(StatusLineWrapper.referencesWrapper("bash '\(path)'", atPath: path))
+    #expect(StatusLineWrapper.referencesWrapper("'\(path)'", atPath: path))
+    #expect(!StatusLineWrapper.referencesWrapper("~/my-statusline.sh", atPath: path))
+}

@@ -151,7 +151,7 @@ final class IntegrationInstaller: ObservableObject {
         var settings = try decodeJSONObject(originalData)
 
         if isManagedStatusLine(settings["statusLine"]), itemExists(at: statusLineStateURL) {
-            let state = try readStatusLineState()
+            var state = try readStatusLineState()
             if itemExists(at: statusLineWrapperURL) {
                 guard try regularFile(at: statusLineWrapperURL) else {
                     throw IntegrationError.unrelatedManagedFile(statusLineWrapperURL.path)
@@ -161,11 +161,11 @@ final class IntegrationInstaller: ObservableObject {
                     throw IntegrationError.unrelatedManagedFile(statusLineWrapperURL.path)
                 }
             }
-            let originalCommand = state.originalStatusLineJSON.flatMap { data -> String? in
-                guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    return nil
-                }
-                return object["command"] as? String
+            var originalCommand = command(fromStatusLineJSON: state.originalStatusLineJSON)
+            if originalCommand.map(referencesStatusLineWrapper) == true {
+                state = StatusLineWrapperState(originalStatusLineJSON: nil)
+                originalCommand = nil
+                try writeAtomically(try JSONEncoder().encode(state), to: statusLineStateURL, permissions: 0o600)
             }
             let script = StatusLineWrapper.generate(
                 hookPath: NotchBotPaths.installedHookURL.path,
@@ -185,7 +185,8 @@ final class IntegrationInstaller: ObservableObject {
             guard StatusLineWrapper.isOwned(legacyWrapper) || StatusLineWrapper.isPreviousVersion(legacyWrapper) else {
                 throw IntegrationError.unrelatedManagedFile(statusLineWrapperURL.path)
             }
-            if let command = StatusLineWrapper.extractChainedCommand(legacyWrapper) {
+            if let command = StatusLineWrapper.extractChainedCommand(legacyWrapper),
+               !referencesStatusLineWrapper(command) {
                 originalStatusLineJSON = try JSONSerialization.data(
                     withJSONObject: ["type": "command", "command": stripShellQuoting(command)],
                     options: [.sortedKeys]
@@ -197,6 +198,9 @@ final class IntegrationInstaller: ObservableObject {
             guard let object = statusLine as? [String: Any],
                   object["type"] as? String == "command",
                   let command = object["command"] as? String, !command.isEmpty else {
+                throw IntegrationError.invalidManagedFile("Claude statusLine")
+            }
+            guard !referencesStatusLineWrapper(command) else {
                 throw IntegrationError.invalidManagedFile("Claude statusLine")
             }
             originalStatusLineJSON = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
@@ -220,10 +224,7 @@ final class IntegrationInstaller: ObservableObject {
             }
         }
 
-        let originalCommand = originalStatusLineJSON.flatMap { data -> String? in
-            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-            return object["command"] as? String
-        }
+        let originalCommand = command(fromStatusLineJSON: originalStatusLineJSON)
         let script = StatusLineWrapper.generate(
             hookPath: NotchBotPaths.installedHookURL.path,
             existingCommand: originalCommand
@@ -299,6 +300,16 @@ final class IntegrationInstaller: ObservableObject {
             throw IntegrationError.invalidManagedFile(statusLineStateURL.path)
         }
         return state
+    }
+
+    private func command(fromStatusLineJSON data: Data?) -> String? {
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["command"] as? String
+    }
+
+    private func referencesStatusLineWrapper(_ command: String) -> Bool {
+        StatusLineWrapper.referencesWrapper(command, atPath: statusLineWrapperURL.path)
     }
 
     private func cleanupIncompleteCostTrackingFiles() {
