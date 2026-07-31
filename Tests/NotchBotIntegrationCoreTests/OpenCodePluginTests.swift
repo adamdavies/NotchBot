@@ -88,7 +88,7 @@ import Testing
     #expect(plugin.contains("sendCompletion(sessionID)"))
     #expect(!plugin.contains("OpenCode finished working\", 2.5"))
     #expect(plugin.contains("sessionParents.delete(sessionID)"))
-    #expect(plugin.contains("sendEvent(\"attention\", sessionID, \"OpenCode needs permission\""))
+    #expect(plugin.contains("sendEvent(\"attention\", sessionID, \"OpenCode needs your attention\""))
     #expect(plugin.contains("case \"permission.updated\":"))
     #expect(plugin.contains("void requestPermission(sessionID, properties, requestID, key)"))
     #expect(plugin.contains("const activePermissionRequests = new Map()"))

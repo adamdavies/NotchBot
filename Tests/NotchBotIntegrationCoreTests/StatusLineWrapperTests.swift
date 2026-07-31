@@ -41,6 +41,21 @@ import Testing
     #expect(decoded.originalStatusLineJSON == original)
 }
 
+@Test func statusLineWrapperExtractsChainedCommand() {
+    let script = StatusLineWrapper.generate(
+        hookPath: "/tmp/hook",
+        existingCommand: "bash '/Users/test/.claude/statusline-command.sh'"
+    )
+    let extracted = StatusLineWrapper.extractChainedCommand(script)
+    #expect(extracted == "bash '/Users/test/.claude/statusline-command.sh'")
+
+    let noChain = StatusLineWrapper.generate(hookPath: "/tmp/hook", existingCommand: nil)
+    #expect(StatusLineWrapper.extractChainedCommand(noChain) == nil)
+
+    let withQuotes = StatusLineWrapper.generate(hookPath: "/tmp/hook", existingCommand: "echo 'hello world'")
+    #expect(StatusLineWrapper.extractChainedCommand(withQuotes) == "echo 'hello world'")
+}
+
 @Test func statusLineWrapperDetectsRecursiveCommands() {
     let path = "/Users/test/Library/Application Support/NotchBot/bin/notchbot-statusline"
 

@@ -59,20 +59,6 @@ final class ActivityModel: ObservableObject {
         installDailyResetObservers()
     }
 
-    deinit {
-        maintenanceTask?.cancel()
-        dailyResetTask?.cancel()
-        for observer in calendarObservers {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
-        }
-        for task in expiryTasks.values {
-            task.cancel()
-        }
-    }
-
     var displayedRobotState: RobotState {
         previewState ?? robotState
     }
@@ -450,6 +436,23 @@ final class ActivityModel: ObservableObject {
         let sessionIDs = Set(reducer.activities.map(\.id))
         for key in expiryTasks.keys where !sessionIDs.contains(key) {
             expiryTasks.removeValue(forKey: key)?.cancel()
+        }
+    }
+
+    func shutdown() {
+        maintenanceTask?.cancel()
+        maintenanceTask = nil
+        dailyResetTask?.cancel()
+        dailyResetTask = nil
+        for task in expiryTasks.values { task.cancel() }
+        expiryTasks.removeAll()
+        for observer in calendarObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        calendarObservers.removeAll()
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
         }
     }
 }

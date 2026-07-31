@@ -152,7 +152,8 @@ private struct AgentQueueRow: View {
                 }
                 if session.state == .attention, let reason = session.reason {
                     Text("·")
-                    Text(reason)
+                    Text(session.permission == nil && reason.localizedCaseInsensitiveContains("permission")
+                         ? "Needs your attention" : reason)
                 }
                 if session.pendingRequestCount > 1 {
                     Text("·")

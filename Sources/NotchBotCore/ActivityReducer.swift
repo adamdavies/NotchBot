@@ -457,6 +457,10 @@ public struct ActivityReducer: Sendable {
             session.permission = presentedRequest.permission
             session.isAwaitingPermissionResolution = true
         } else {
+            if session.providerState == .attention {
+                session.providerState = .working
+                session.providerReason = nil
+            }
             session.state = session.providerState
             session.reason = session.providerReason
             session.permission = nil

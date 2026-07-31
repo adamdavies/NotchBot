@@ -274,7 +274,7 @@ public enum OpenCodePlugin {
                 "attention",
                 sessionID,
                 sessionParents.get(sessionID),
-                "OpenCode needs permission",
+                "OpenCode needs your attention",
                 directory,
                 null,
                 taskLabels.get(sessionID) ?? fallbackTaskLabel,
@@ -427,14 +427,14 @@ public enum OpenCodePlugin {
               case "permission.v2.asked": {
                 const requestID = nativeRequestID(properties)
                 if (!requestID) {
-                  sendEvent("attention", sessionID, "OpenCode needs permission", null)
+                  sendEvent("attention", sessionID, "OpenCode needs your attention", null)
                   break
                 }
                 const key = requestKey(sessionID, "permission", requestID)
                 if (resolvedRequests.has(key)) break
                 if (knownRequests.has(key)) break
                 if (knownRequests.size >= 256) {
-                  sendEvent("attention", sessionID, "OpenCode needs permission", null)
+                  sendEvent("attention", sessionID, "OpenCode needs your attention", null)
                   break
                 }
                 knownRequests.set(key, sessionID)

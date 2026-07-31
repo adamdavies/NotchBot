@@ -87,6 +87,7 @@ private final class DisplayPanelController {
         )
         configure(panel)
         configure(summaryPanel)
+        summaryPanel.hasShadow = false
         summaryPanel.alphaValue = 0
 
         panel.contentView = NSHostingView(
@@ -239,6 +240,8 @@ private final class DisplayPanelController {
         model.previewState == nil
     }
 
+    private static let shadowPadding: CGFloat = 50
+
     private var detailSize: NSSize {
         guard !model.activeSessions.isEmpty else {
             return NSSize(width: 420, height: 80 + QueueProgressFooter.height)
@@ -253,6 +256,7 @@ private final class DisplayPanelController {
     private func updateDetailFrame() {
         guard let geometry else { return }
         let size = detailSize
+        let pad = Self.shadowPadding
         let screenFrame = geometry.screenFrame
         let cardTop = screenFrame.maxY - geometry.coverageHeight - 4
         let notchCenterX = geometry.originX + geometry.width / 2
@@ -261,10 +265,10 @@ private final class DisplayPanelController {
             screenFrame.maxX - size.width - 8
         )
         summaryFrame = NSRect(
-            x: cardX,
-            y: cardTop - size.height,
-            width: size.width,
-            height: size.height
+            x: cardX - pad,
+            y: cardTop - size.height - pad,
+            width: size.width + pad * 2,
+            height: size.height + pad * 2
         )
         if summaryPanel.isVisible {
             summaryPanel.contentView?.layer?.removeAllAnimations()

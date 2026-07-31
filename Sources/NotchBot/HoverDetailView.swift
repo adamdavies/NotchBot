@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct HoverDetailView: View {
+    static let shadowPadding: CGFloat = 50
+
     @ObservedObject var model: ActivityModel
     let onHoverChanged: (Bool) -> Void
 
@@ -12,5 +14,7 @@ struct HoverDetailView: View {
                 AgentQueueView(model: model, onHoverChanged: onHoverChanged)
             }
         }
+        .padding(Self.shadowPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
