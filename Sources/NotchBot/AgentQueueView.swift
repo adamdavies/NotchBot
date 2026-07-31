@@ -58,6 +58,8 @@ struct AgentQueueView: View {
                     }
                 }
             }
+
+            QueueProgressFooter(model: model)
         }
         .frame(width: 380, height: queueHeight)
         .background(cardBackground)
@@ -94,6 +96,7 @@ struct AgentQueueView: View {
 
     private var queueHeight: CGFloat {
         42 + model.activeSessions.prefix(5).reduce(0) { $0 + rowHeight(for: $1) + 1 }
+            + QueueProgressFooter.height
     }
 
     private func rowHeight(for session: SessionActivity) -> CGFloat {

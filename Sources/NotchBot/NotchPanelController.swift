@@ -241,13 +241,13 @@ private final class DisplayPanelController {
 
     private var detailSize: NSSize {
         guard !model.activeSessions.isEmpty else {
-            return NSSize(width: 320, height: 80)
+            return NSSize(width: 320, height: 80 + QueueProgressFooter.height)
         }
         let height = model.activeSessions.prefix(5).reduce(CGFloat(42)) { result, session in
             guard let permission = session.permission else { return result + 58 }
             return result + (permission.context == nil ? 107 : 127)
         }
-        return NSSize(width: 380, height: height)
+        return NSSize(width: 380, height: height + QueueProgressFooter.height)
     }
 
     private func updateDetailFrame() {

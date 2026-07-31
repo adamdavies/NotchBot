@@ -7,7 +7,7 @@ struct HoverDetailView: View {
     var body: some View {
         Group {
             if model.activeSessions.isEmpty {
-                EmptyQueueView(onHoverChanged: onHoverChanged)
+                EmptyQueueView(model: model, onHoverChanged: onHoverChanged)
             } else {
                 AgentQueueView(model: model, onHoverChanged: onHoverChanged)
             }

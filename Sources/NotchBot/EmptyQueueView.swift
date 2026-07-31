@@ -1,21 +1,27 @@
 import SwiftUI
 
 struct EmptyQueueView: View {
+    @ObservedObject var model: ActivityModel
     let onHoverChanged: (Bool) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Bots")
-                .font(.system(size: 13, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.92))
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Bots")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
 
-            Text("No bot activity in the queue.")
-                .font(.system(size: 11.5, design: .rounded))
-                .foregroundStyle(.white.opacity(0.58))
+                Text("No bot activity in the queue.")
+                    .font(.system(size: 11.5, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.58))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(width: 320, height: 80, alignment: .topLeading)
+
+            QueueProgressFooter(model: model)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(width: 320, height: 80, alignment: .topLeading)
+        .frame(width: 320, height: 80 + QueueProgressFooter.height)
         .background {
             UnevenRoundedRectangle(
                 topLeadingRadius: 4,

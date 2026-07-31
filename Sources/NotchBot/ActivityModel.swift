@@ -98,6 +98,20 @@ final class ActivityModel: ObservableObject {
         return "\(dailyCompletionCount) completed runs · \(tier.displayName) · \(nextTier.threshold - dailyCompletionCount) to \(nextTier.displayName)"
     }
 
+    var queueCoolnessProgress: Double {
+        guard let nextTier = CoolnessTier.allCases.first(where: { $0.threshold > dailyCompletionCount }) else {
+            return 1
+        }
+        let completedInTier = dailyCompletionCount - coolnessTier.threshold
+        let runsInTier = nextTier.threshold - coolnessTier.threshold
+        return Double(completedInTier) / Double(runsInTier)
+    }
+
+    var queueCoolnessProgressText: String {
+        guard coolnessTier != .crown else { return "Max level" }
+        return "\(Int((queueCoolnessProgress * 100).rounded()))% to next"
+    }
+
     func receive(_ event: AgentEvent) {
         refreshDailyCoolness()
         guard (try? AgentEventValidator.validate(event)) != nil else { return }

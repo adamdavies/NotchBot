@@ -25,3 +25,23 @@ import Testing
     #expect(model.previewCoolnessTier == nil)
     #expect(!model.isPreviewing)
 }
+
+@Test @MainActor func queueCoolnessProgressDescribesTheNextLevel() throws {
+    let suiteName = "QueueCoolnessProgressTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let now = Date()
+    let calendar = Calendar.current
+
+    DailyCoolnessPreference.save(completionCount: 35, to: defaults, now: now, calendar: calendar)
+    let glowModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)
+    #expect(glowModel.coolnessTier == .glow)
+    #expect(glowModel.queueCoolnessProgress == 0.4)
+    #expect(glowModel.queueCoolnessProgressText == "40% to next")
+
+    DailyCoolnessPreference.save(completionCount: 100, to: defaults, now: now, calendar: calendar)
+    let crownModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)
+    #expect(crownModel.coolnessTier == .crown)
+    #expect(crownModel.queueCoolnessProgress == 1)
+    #expect(crownModel.queueCoolnessProgressText == "Max level")
+}
