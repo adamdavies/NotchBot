@@ -17,11 +17,11 @@ struct EmptyQueueView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .frame(width: 320, height: 80, alignment: .topLeading)
+            .frame(width: 420, height: 80, alignment: .topLeading)
 
             QueueProgressFooter(model: model)
         }
-        .frame(width: 320, height: 80 + QueueProgressFooter.height)
+        .frame(width: 420, height: 80 + QueueProgressFooter.height)
         .background {
             UnevenRoundedRectangle(
                 topLeadingRadius: 4,

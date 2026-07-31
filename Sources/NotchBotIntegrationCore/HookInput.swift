@@ -6,6 +6,7 @@ public struct HookOptions: Equatable, Sendable {
     public let reason: String?
     public let expiresAfter: TimeInterval?
     public let permissionRequest: Bool
+    public let statusLine: Bool
 }
 
 public enum HookInputError: Error, Equatable {
@@ -45,7 +46,13 @@ public enum HookInput {
             throw HookInputError.invalidArguments
         }
         let mode = values["--mode"] ?? "event"
-        guard ["event", "permission"].contains(mode), mode != "permission" || kind == "attention" else {
+        guard ["event", "permission", "statusline"].contains(mode) else {
+            throw HookInputError.invalidArguments
+        }
+        guard mode != "permission" || kind == "attention" else {
+            throw HookInputError.invalidArguments
+        }
+        guard mode != "statusline" || (source == "claude" && kind == "metadata") else {
             throw HookInputError.invalidArguments
         }
 
@@ -64,7 +71,8 @@ public enum HookInput {
             kind: kind,
             reason: values["--reason"],
             expiresAfter: expiresAfter,
-            permissionRequest: mode == "permission"
+            permissionRequest: mode == "permission",
+            statusLine: mode == "statusline"
         )
     }
 
@@ -74,6 +82,7 @@ public enum HookInput {
         guard let decoded = try? JSONDecoder().decode(BasicPayload.self, from: input) else {
             throw HookInputError.invalidJSON
         }
+        let costUSD = decoded.costUSD.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
         return HookPayload(
             sessionID: try validatedIdentifier(decoded.sessionID),
             cwd: bounded(decoded.cwd, bytes: 1_024),
@@ -87,7 +96,9 @@ public enum HookInput {
             permissionCanAlways: decoded.permissionCanAlways ?? false,
             requestID: try validatedIdentifier(decoded.requestID),
             requestKind: decoded.requestKind,
-            requestState: decoded.requestState
+            requestState: decoded.requestState,
+            costUSD: costUSD,
+            costGeneration: try validatedIdentifier(decoded.costGeneration)
         )
     }
 
@@ -170,6 +181,8 @@ public struct HookPayload: Equatable, Sendable {
     public let requestID: String?
     public let requestKind: String?
     public let requestState: String?
+    public let costUSD: Double?
+    public let costGeneration: String?
 }
 
 private struct BasicPayload: Decodable {
@@ -186,6 +199,8 @@ private struct BasicPayload: Decodable {
     let requestID: String?
     let requestKind: String?
     let requestState: String?
+    let costUSD: Double?
+    let costGeneration: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -201,6 +216,45 @@ private struct BasicPayload: Decodable {
         case requestID = "request_id"
         case requestKind = "request_kind"
         case requestState = "request_state"
+        case costUSD = "cost_usd"
+        case costGeneration = "cost_generation"
+    }
+}
+
+public struct StatusLinePayload: Equatable, Sendable {
+    public let sessionID: String?
+    public let costUSD: Double?
+}
+
+private struct StatusLineJSON: Decodable {
+    let sessionID: String?
+    let cost: StatusLineCost?
+
+    struct StatusLineCost: Decodable {
+        let totalCostUSD: Double?
+        enum CodingKeys: String, CodingKey {
+            case totalCostUSD = "total_cost_usd"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case cost
+    }
+}
+
+extension HookInput {
+    public static func decodeStatusLinePayload(from input: Data) throws -> StatusLinePayload? {
+        guard input.count <= maximumByteCount else { throw HookInputError.inputTooLarge }
+        guard !input.isEmpty else { return nil }
+        guard let decoded = try? JSONDecoder().decode(StatusLineJSON.self, from: input) else {
+            throw HookInputError.invalidJSON
+        }
+        let costUSD = decoded.cost?.totalCostUSD.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        return StatusLinePayload(
+            sessionID: try validatedIdentifier(decoded.sessionID),
+            costUSD: costUSD
+        )
     }
 }
 

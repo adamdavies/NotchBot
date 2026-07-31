@@ -923,3 +923,29 @@ import Testing
 
     #expect(reducer.sessionCount == 0)
 }
+
+@Test func metadataCostUsesLatestSessionEstimate() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "session", timestamp: start
+    ))
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(1), costUSD: 0.05
+    ))
+
+    #expect(reducer.primarySession?.costUSD == 0.05)
+
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(2), costUSD: 0.12
+    ))
+    #expect(reducer.primarySession?.costUSD == 0.12)
+
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(3), costUSD: 0.08
+    ))
+    #expect(reducer.primarySession?.costUSD == 0.08)
+}

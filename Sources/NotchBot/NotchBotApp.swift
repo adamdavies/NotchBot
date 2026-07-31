@@ -103,6 +103,16 @@ private struct NotchBotMenu: View {
                     integrations.uninstall()
                 }
                 notificationButton
+                Button(integrations.costTrackingEnabled
+                    ? "Disable Cost Tracking"
+                    : "Enable Cost Tracking"
+                ) {
+                    if integrations.costTrackingEnabled {
+                        integrations.disableCostTracking()
+                    } else {
+                        confirmCostTracking()
+                    }
+                }
                 Button(integrations.launchesAtLogin ? "Disable Launch at Login" : "Enable Launch at Login") {
                     integrations.toggleLaunchAtLogin()
                 }
@@ -142,6 +152,21 @@ private struct NotchBotMenu: View {
                     .keyboardShortcut("q")
             }
             .padding(8)
+    }
+
+    private func confirmCostTracking() {
+        Task { @MainActor in
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Enable estimated cost tracking?"
+            alert.informativeText = "NotchBot will collect estimated session costs from OpenCode and wrap your Claude Code status line command to read its session cost estimate. Your existing status line configuration (if any) will continue to work and will be restored when tracking is disabled.\n\nCost estimates are based on provider pricing and may not reflect enterprise discounts or subscription allowances."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Enable")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                integrations.enableCostTracking()
+            }
+        }
     }
 
     private var statusText: String {

@@ -41,6 +41,37 @@ import Testing
     #expect(remainingHooks["Stop"] == nil)
 }
 
+@Test func mergeReclaimsShellFormHandlersMissingArgs() {
+    let path = "/tmp/notchbot-hook"
+    let previous: [String: Any] = [
+        "hooks": [
+            "SessionStart": [[
+                "hooks": [["type": "command", "command": path, "timeout": 5]],
+            ]],
+            "Stop": [[
+                "hooks": [
+                    ["type": "command", "command": path, "timeout": 5],
+                    ["type": "command", "command": "/tmp/other", "timeout": 5],
+                ],
+            ]],
+        ],
+    ]
+
+    let merged = ClaudeHooks.merging(into: previous, hookPath: path)
+    let hooks = merged["hooks"] as! [String: Any]
+
+    let sessionStartHandlers = (hooks["SessionStart"] as! [[String: Any]]).flatMap {
+        $0["hooks"] as! [[String: Any]]
+    }
+    #expect(sessionStartHandlers.count == 1)
+    #expect(sessionStartHandlers[0]["args"] as? [String] == ["--source", "claude", "--kind", "metadata"])
+
+    let stopHandlers = (hooks["Stop"] as! [[String: Any]]).flatMap { $0["hooks"] as! [[String: Any]] }
+    #expect(stopHandlers.count == 2)
+    #expect(stopHandlers.contains { $0["command"] as? String == "/tmp/other" })
+    #expect(stopHandlers.allSatisfy { $0["command"] as? String != path || $0["args"] != nil })
+}
+
 @Test func mergeAddsSubagentHooksAndMigratesPreviousHookSet() {
     let path = "/tmp/notchbot-hook"
     let previous: [String: Any] = [

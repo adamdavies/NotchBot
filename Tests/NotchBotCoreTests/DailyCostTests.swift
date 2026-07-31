@@ -1,0 +1,235 @@
+import Foundation
+import Testing
+@testable import NotchBotCore
+
+@Test func dailyCostTracksLatestCumulativeValuePerSession() {
+    var tracker = DailyCostTracker()
+
+    let first = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 0.05
+    ))
+    #expect(first)
+    #expect(tracker.totalCost == 0.05)
+
+    let update = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 0.12
+    ))
+    #expect(update)
+    #expect(abs(tracker.totalCost - 0.12) < 0.001)
+}
+
+@Test func dailyCostRejectsSameOrLowerValue() {
+    var tracker = DailyCostTracker()
+    tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 0.10
+    ))
+
+    let same = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 0.10
+    ))
+    let lower = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 0.05
+    ))
+    #expect(!same)
+    #expect(!lower)
+    #expect(tracker.totalCost == 0.10)
+}
+
+@Test func dailyCostSumsAcrossSessions() {
+    var tracker = DailyCostTracker()
+    tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 1.00
+    ))
+    tracker.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "s2", costUSD: 2.50
+    ))
+    #expect(abs(tracker.totalCost - 3.50) < 0.001)
+}
+
+@Test func dailyCostKeepsProvidersIndependent() {
+    var tracker = DailyCostTracker()
+    tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "shared", costUSD: 1.00
+    ))
+    tracker.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "shared", costUSD: 2.00
+    ))
+    #expect(abs(tracker.totalCost - 3.00) < 0.001)
+}
+
+@Test func dailyCostKeepsProviderGenerationsIndependent() {
+    var tracker = DailyCostTracker()
+    tracker.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "s1",
+        costUSD: 1.00, costGeneration: "first"
+    ))
+    tracker.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "s1",
+        costUSD: 0.25, costGeneration: "second"
+    ))
+
+    #expect(tracker.totalCost == 1.25)
+}
+
+@Test func dailyCostIgnoresEventsWithoutCost() {
+    var tracker = DailyCostTracker()
+    let noCost = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1"
+    ))
+    #expect(!noCost)
+    #expect(tracker.totalCost == 0)
+}
+
+@Test func dailyCostRejectsInvalidValues() {
+    var tracker = DailyCostTracker()
+    let negative = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: -1.0
+    ))
+    let infinite = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s2", costUSD: .infinity
+    ))
+    let nan = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s3", costUSD: .nan
+    ))
+    #expect(!negative)
+    #expect(!infinite)
+    #expect(!nan)
+    #expect(tracker.totalCost == 0)
+}
+
+@Test func dailyCostResetClearsAllState() {
+    var tracker = DailyCostTracker()
+    tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 5.00
+    ))
+    tracker.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "s2", costUSD: 3.00
+    ))
+    tracker.reset()
+    #expect(tracker.totalCost == 0)
+
+    let afterReset = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 0.01
+    ))
+    #expect(afterReset)
+    #expect(tracker.totalCost == 0.01)
+}
+
+@Test func dailyCostNewDayRetainsCumulativeBaselines() {
+    var tracker = DailyCostTracker()
+    tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 5.00
+    ))
+
+    tracker.beginNewDay()
+    #expect(tracker.totalCost == 0)
+    #expect(tracker.sessionCosts["claude:s1"] == 5.00)
+
+    tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 5.25
+    ))
+    #expect(tracker.totalCost == 0.25)
+}
+
+@Test func dailyCostDropsBaselinesNotSeenDuringPreviousDay() {
+    var tracker = DailyCostTracker(sessionCosts: ["claude:old": 1.00])
+
+    tracker.beginNewDay()
+    #expect(tracker.sessionCosts["claude:old"] == 1.00)
+    tracker.beginNewDay()
+    #expect(tracker.sessionCosts.isEmpty)
+}
+
+@Test func dailyCostOverflowFailsClosed() {
+    var tracker = DailyCostTracker()
+    for index in 0..<DailyCostTracker.maximumTrackedSessions {
+        let applied = tracker.apply(AgentEvent(
+            source: .claude, kind: .metadata, sessionID: "s-\(index)", costUSD: 0.01
+        ))
+        #expect(applied)
+    }
+
+    let overflow = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "overflow", costUSD: 0.01
+    ))
+    #expect(!overflow)
+}
+
+@Test func dailyCostPreferencePersistsOnlyCurrentDay() throws {
+    let suiteName = "DailyCostTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+    let now = try #require(calendar.date(from: DateComponents(
+        year: 2026, month: 3, day: 8, hour: 23, minute: 30
+    )))
+
+    let sessions: [String: Double] = ["claude:s1": 1.50, "opencode:s2": 2.30]
+    DailyCostPreference.save(
+        totalCost: 3.80, sessionCosts: sessions,
+        to: defaults, now: now, calendar: calendar
+    )
+    let loaded = DailyCostPreference.load(from: defaults, now: now, calendar: calendar)
+    #expect(abs(loaded.totalCost - 3.80) < 0.001)
+    #expect(loaded.sessionCosts.count == 2)
+    #expect(loaded.sessionCosts["claude:s1"] == 1.50)
+
+    let nextDay = try #require(calendar.date(byAdding: .hour, value: 2, to: now))
+    let rolled = DailyCostPreference.load(from: defaults, now: nextDay, calendar: calendar)
+    #expect(rolled.totalCost == 0)
+    #expect(rolled.sessionCosts == sessions)
+}
+
+@Test func dailyCostPreferenceRejectsInvalidData() throws {
+    let suiteName = "DailyCostTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let now = Date()
+    let calendar = Calendar(identifier: .gregorian)
+
+    defaults.set(
+        DailyCoolnessPreference.dayIdentifier(for: now, calendar: calendar),
+        forKey: DailyCostPreference.dayKey
+    )
+    defaults.set(-5.0, forKey: DailyCostPreference.totalKey)
+    let loaded = DailyCostPreference.load(from: defaults, now: now, calendar: calendar)
+    #expect(loaded.totalCost == 0)
+}
+
+@Test func dailyCostPreferenceCanBeCleared() throws {
+    let suiteName = "DailyCostClearTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let now = Date()
+    let calendar = Calendar(identifier: .gregorian)
+    DailyCostPreference.save(
+        totalCost: 1.25,
+        sessionCosts: ["claude:s1": 1.25],
+        to: defaults,
+        now: now,
+        calendar: calendar
+    )
+
+    DailyCostPreference.clear(from: defaults)
+
+    #expect(defaults.object(forKey: DailyCostPreference.dayKey) == nil)
+    #expect(defaults.object(forKey: DailyCostPreference.totalKey) == nil)
+    #expect(defaults.object(forKey: DailyCostPreference.sessionsKey) == nil)
+}
+
+@Test func dailyCostInitializesFromPersistedSessionCosts() {
+    let sessions: [String: Double] = ["claude:s1": 1.00, "opencode:s2": 2.00]
+    var tracker = DailyCostTracker(totalCost: 3.00, sessionCosts: sessions)
+
+    let duplicate = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 0.50
+    ))
+    #expect(!duplicate)
+
+    let update = tracker.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s1", costUSD: 1.50
+    ))
+    #expect(update)
+    #expect(abs(tracker.totalCost - 3.50) < 0.001)
+}

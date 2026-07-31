@@ -4,6 +4,10 @@ import Foundation
 import NotchBotCore
 import UserNotifications
 
+extension Notification.Name {
+    static let notchBotCostTrackingDisabled = Notification.Name("NotchBotCostTrackingDisabled")
+}
+
 @MainActor
 final class ActivityModel: ObservableObject {
     @Published private(set) var robotState: RobotState = .idle
@@ -14,11 +18,13 @@ final class ActivityModel: ObservableObject {
     @Published private(set) var previewState: RobotState?
     @Published private(set) var previewCoolnessTier: CoolnessTier?
     @Published private(set) var dailyCompletionCount: Int
+    @Published private(set) var dailyCostTotal: Double
     @Published private(set) var activeSessions: [SessionActivity] = []
     @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
 
     private var reducer = ActivityReducer()
     private var coolnessTracker: DailyCoolnessTracker
+    private var costTracker: DailyCostTracker
     private var expiryTasks: [String: Task<Void, Never>] = [:]
     private var maintenanceTask: Task<Void, Never>?
     private let defaults: UserDefaults
@@ -39,6 +45,9 @@ final class ActivityModel: ObservableObject {
         let savedCount = DailyCoolnessPreference.load(from: defaults, now: now, calendar: calendar)
         dailyCompletionCount = savedCount
         coolnessTracker = DailyCoolnessTracker(completionCount: savedCount)
+        let savedCost = DailyCostPreference.load(from: defaults, now: now, calendar: calendar)
+        dailyCostTotal = savedCost.totalCost
+        costTracker = DailyCostTracker(totalCost: savedCost.totalCost, sessionCosts: savedCost.sessionCosts)
         maintenanceTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
@@ -112,6 +121,10 @@ final class ActivityModel: ObservableObject {
         return "\(Int((queueCoolnessProgress * 100).rounded()))% to next"
     }
 
+    var dailyCostDisplayText: String {
+        String(format: "~$%.2f today", dailyCostTotal)
+    }
+
     func receive(_ event: AgentEvent) {
         refreshDailyCoolness()
         guard (try? AgentEventValidator.validate(event)) != nil else { return }
@@ -136,6 +149,16 @@ final class ActivityModel: ObservableObject {
             dailyCompletionCount = coolnessTracker.completionCount
             DailyCoolnessPreference.save(
                 completionCount: dailyCompletionCount,
+                to: defaults,
+                now: Date(),
+                calendar: calendar
+            )
+        }
+        if costTracker.apply(event) {
+            dailyCostTotal = costTracker.totalCost
+            DailyCostPreference.save(
+                totalCost: costTracker.totalCost,
+                sessionCosts: costTracker.sessionCosts,
                 to: defaults,
                 now: Date(),
                 calendar: calendar
@@ -341,6 +364,15 @@ final class ActivityModel: ObservableObject {
             now: now,
             calendar: calendar
         )
+        costTracker.beginNewDay()
+        dailyCostTotal = 0
+        DailyCostPreference.save(
+            totalCost: 0,
+            sessionCosts: costTracker.sessionCosts,
+            to: defaults,
+            now: now,
+            calendar: calendar
+        )
     }
 
     private func scheduleDailyReset(now: Date) {
@@ -377,6 +409,16 @@ final class ActivityModel: ObservableObject {
                 }
             }
         }
+        calendarObservers.append(NotificationCenter.default.addObserver(
+            forName: .notchBotCostTrackingDisabled,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.costTracker.reset()
+                self?.dailyCostTotal = 0
+            }
+        })
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,

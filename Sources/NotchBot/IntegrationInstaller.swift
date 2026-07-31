@@ -9,10 +9,14 @@ final class IntegrationInstaller: ObservableObject {
     @Published private(set) var message = "Integrations not installed"
     @Published private(set) var launchesAtLogin = SMAppService.mainApp.status == .enabled
     @Published private(set) var requiresUpdate = false
+    @Published private(set) var costTrackingEnabled: Bool
+
+    private static let costTrackingKey = "costTrackingEnabled"
 
     private let fileManager = FileManager.default
 
     init() {
+        costTrackingEnabled = UserDefaults.standard.bool(forKey: Self.costTrackingKey)
         refreshStatus()
     }
 
@@ -27,6 +31,10 @@ final class IntegrationInstaller: ObservableObject {
 
     func uninstall() {
         do {
+            if costTrackingEnabled || itemExists(at: statusLineStateURL) {
+                try disableCostTrackingFiles()
+                clearCostTrackingPreferences()
+            }
             let pluginExists = itemExists(at: openCodePluginURL)
             let pluginIsLegacy = pluginExists
                 ? try isLegacyPlugin(at: openCodePluginURL) || isPreviousPlugin(at: openCodePluginURL)
@@ -62,6 +70,7 @@ final class IntegrationInstaller: ObservableObject {
             }
             try removeLegacyPrivacyPolicyIfOwned()
             message = "Integrations removed"
+            costTrackingEnabled = false
             requiresUpdate = false
         } catch {
             message = "Removal failed: \(error.localizedDescription)"
@@ -79,6 +88,236 @@ final class IntegrationInstaller: ObservableObject {
         } catch {
             message = "Launch at login failed: \(error.localizedDescription)"
         }
+    }
+
+    func enableCostTracking() {
+        do {
+            guard itemExists(at: NotchBotPaths.installedHookURL), itemExists(at: openCodePluginURL) else {
+                message = "Install integrations first"
+                return
+            }
+            try enableCostTrackingFiles()
+            UserDefaults.standard.set(true, forKey: Self.costTrackingKey)
+            costTrackingEnabled = true
+            message = "Cost tracking enabled"
+        } catch {
+            if (try? isOwnedPlugin(at: openCodePluginURL)) == true {
+                try? writeOpenCodePlugin(
+                    hookURL: NotchBotPaths.installedHookURL,
+                    includeCostTracking: false
+                )
+            }
+            cleanupIncompleteCostTrackingFiles()
+            message = "Cost tracking failed: \(error.localizedDescription)"
+        }
+    }
+
+    func disableCostTracking() {
+        do {
+            try disableCostTrackingFiles()
+            clearCostTrackingPreferences()
+            costTrackingEnabled = false
+            message = "Cost tracking disabled"
+        } catch {
+            message = "Disable cost tracking failed: \(error.localizedDescription)"
+        }
+    }
+
+    private var statusLineWrapperURL: URL {
+        NotchBotPaths.applicationSupportDirectory
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("notchbot-statusline")
+    }
+
+    private var statusLineStateURL: URL {
+        NotchBotPaths.applicationSupportDirectory.appendingPathComponent("statusline-state.json")
+    }
+
+    private func enableCostTrackingFiles() throws {
+        try preparePrivateSupportDirectory()
+        guard try isOwnedHelper(), try isOwnedPlugin(at: openCodePluginURL) else {
+            throw IntegrationError.explicitUpdateRequired
+        }
+
+        let settingsURL = claudeSettingsURL
+        try fileManager.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if itemExists(at: settingsURL), !(try regularFile(at: settingsURL)) {
+            throw IntegrationError.unsafeClaudeSettings
+        }
+        let originalData = itemExists(at: settingsURL)
+            ? try boundedData(at: settingsURL, maximum: 4 * 1_024 * 1_024)
+            : Data()
+        let originalMode = try fileMode(at: settingsURL) ?? 0o600
+        var settings = try decodeJSONObject(originalData)
+
+        if isManagedStatusLine(settings["statusLine"]), itemExists(at: statusLineStateURL) {
+            let state = try readStatusLineState()
+            if itemExists(at: statusLineWrapperURL) {
+                guard try regularFile(at: statusLineWrapperURL) else {
+                    throw IntegrationError.unrelatedManagedFile(statusLineWrapperURL.path)
+                }
+                let wrapper = try boundedString(at: statusLineWrapperURL, maximum: 128 * 1_024)
+                guard StatusLineWrapper.isOwned(wrapper) || StatusLineWrapper.isPreviousVersion(wrapper) else {
+                    throw IntegrationError.unrelatedManagedFile(statusLineWrapperURL.path)
+                }
+            }
+            let originalCommand = state.originalStatusLineJSON.flatMap { data -> String? in
+                guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return nil
+                }
+                return object["command"] as? String
+            }
+            let script = StatusLineWrapper.generate(
+                hookPath: NotchBotPaths.installedHookURL.path,
+                existingCommand: originalCommand
+            )
+            try writeAtomically(Data(script.utf8), to: statusLineWrapperURL, permissions: 0o700)
+            try writeOpenCodePlugin(hookURL: NotchBotPaths.installedHookURL, includeCostTracking: true)
+            return
+        }
+
+        let originalStatusLineJSON: Data?
+        if isManagedStatusLine(settings["statusLine"]), !itemExists(at: statusLineWrapperURL) {
+            throw IntegrationError.invalidManagedFile(statusLineWrapperURL.path)
+        }
+        if isManagedStatusLine(settings["statusLine"]), itemExists(at: statusLineWrapperURL) {
+            let legacyWrapper = try boundedString(at: statusLineWrapperURL, maximum: 128 * 1_024)
+            guard StatusLineWrapper.isOwned(legacyWrapper) || StatusLineWrapper.isPreviousVersion(legacyWrapper) else {
+                throw IntegrationError.unrelatedManagedFile(statusLineWrapperURL.path)
+            }
+            if let command = StatusLineWrapper.extractChainedCommand(legacyWrapper) {
+                originalStatusLineJSON = try JSONSerialization.data(
+                    withJSONObject: ["type": "command", "command": stripShellQuoting(command)],
+                    options: [.sortedKeys]
+                )
+            } else {
+                originalStatusLineJSON = nil
+            }
+        } else if let statusLine = settings["statusLine"] {
+            guard let object = statusLine as? [String: Any],
+                  object["type"] as? String == "command",
+                  let command = object["command"] as? String, !command.isEmpty else {
+                throw IntegrationError.invalidManagedFile("Claude statusLine")
+            }
+            originalStatusLineJSON = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        } else {
+            originalStatusLineJSON = nil
+        }
+
+        if itemExists(at: statusLineWrapperURL) {
+            guard try regularFile(at: statusLineWrapperURL) else {
+                throw IntegrationError.unrelatedManagedFile(statusLineWrapperURL.path)
+            }
+            let contents = try boundedString(at: statusLineWrapperURL, maximum: 128 * 1_024)
+            guard StatusLineWrapper.isOwned(contents) || StatusLineWrapper.isPreviousVersion(contents) else {
+                throw IntegrationError.unrelatedManagedFile(statusLineWrapperURL.path)
+            }
+        }
+        if itemExists(at: statusLineStateURL) {
+            let existingState = try readStatusLineState()
+            guard existingState.originalStatusLineJSON == originalStatusLineJSON else {
+                throw IntegrationError.concurrentSettingsChange
+            }
+        }
+
+        let originalCommand = originalStatusLineJSON.flatMap { data -> String? in
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            return object["command"] as? String
+        }
+        let script = StatusLineWrapper.generate(
+            hookPath: NotchBotPaths.installedHookURL.path,
+            existingCommand: originalCommand
+        )
+        let state = StatusLineWrapperState(originalStatusLineJSON: originalStatusLineJSON)
+        try writeAtomically(try JSONEncoder().encode(state), to: statusLineStateURL, permissions: 0o600)
+        try writeAtomically(Data(script.utf8), to: statusLineWrapperURL, permissions: 0o700)
+
+        var replacementStatusLine = originalStatusLineJSON.flatMap { data in
+            try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        } ?? [:]
+        replacementStatusLine["type"] = "command"
+        replacementStatusLine["command"] = StatusLineWrapper.command(wrapperPath: statusLineWrapperURL.path)
+        settings["statusLine"] = replacementStatusLine
+        try writeOpenCodePlugin(hookURL: NotchBotPaths.installedHookURL, includeCostTracking: true)
+        try replaceClaudeSettings(originalData: originalData, originalMode: originalMode, with: settings)
+    }
+
+    private func disableCostTrackingFiles() throws {
+        let state = try? readStatusLineState()
+        let wrapperIsOwned: Bool
+        if itemExists(at: statusLineWrapperURL), try regularFile(at: statusLineWrapperURL) {
+            let wrapper = try boundedString(at: statusLineWrapperURL, maximum: 128 * 1_024)
+            wrapperIsOwned = StatusLineWrapper.isOwned(wrapper) || StatusLineWrapper.isPreviousVersion(wrapper)
+        } else {
+            wrapperIsOwned = false
+        }
+        let settingsURL = claudeSettingsURL
+        if itemExists(at: settingsURL) {
+            guard try regularFile(at: settingsURL) else { throw IntegrationError.unsafeClaudeSettings }
+            let originalData = try boundedData(at: settingsURL, maximum: 4 * 1_024 * 1_024)
+            let originalMode = try fileMode(at: settingsURL) ?? 0o600
+            var settings = try decodeJSONObject(originalData)
+            if isManagedStatusLine(settings["statusLine"]) {
+                if let saved = state?.originalStatusLineJSON {
+                    guard let object = try JSONSerialization.jsonObject(with: saved) as? [String: Any] else {
+                        throw IntegrationError.invalidManagedFile(statusLineStateURL.path)
+                    }
+                    settings["statusLine"] = object
+                } else {
+                    settings.removeValue(forKey: "statusLine")
+                }
+                try replaceClaudeSettings(originalData: originalData, originalMode: originalMode, with: settings)
+            }
+        }
+
+        if itemExists(at: openCodePluginURL) {
+            guard try isOwnedPlugin(at: openCodePluginURL) else {
+                throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
+            }
+            try writeOpenCodePlugin(hookURL: NotchBotPaths.installedHookURL, includeCostTracking: false)
+        }
+        if wrapperIsOwned { try? fileManager.removeItem(at: statusLineWrapperURL) }
+        if state != nil { try? fileManager.removeItem(at: statusLineStateURL) }
+    }
+
+    private var managedStatusLine: [String: Any] {
+        ["type": "command", "command": StatusLineWrapper.command(wrapperPath: statusLineWrapperURL.path)]
+    }
+
+    private func isManagedStatusLine(_ value: Any?) -> Bool {
+        guard let value = value as? [String: Any],
+              value["type"] as? String == "command" else { return false }
+        return value["command"] as? String == managedStatusLine["command"] as? String
+    }
+
+    private func readStatusLineState() throws -> StatusLineWrapperState {
+        guard itemExists(at: statusLineStateURL), try regularFile(at: statusLineStateURL) else {
+            throw IntegrationError.invalidManagedFile(statusLineStateURL.path)
+        }
+        let data = try boundedData(at: statusLineStateURL, maximum: 128 * 1_024)
+        guard let state = try? JSONDecoder().decode(StatusLineWrapperState.self, from: data), state.isOwned else {
+            throw IntegrationError.invalidManagedFile(statusLineStateURL.path)
+        }
+        return state
+    }
+
+    private func cleanupIncompleteCostTrackingFiles() {
+        guard let data = try? boundedData(at: claudeSettingsURL, maximum: 4 * 1_024 * 1_024),
+              let settings = try? decodeJSONObject(data),
+              !isManagedStatusLine(settings["statusLine"]) else { return }
+        if let wrapper = try? boundedString(at: statusLineWrapperURL, maximum: 128 * 1_024),
+           StatusLineWrapper.isOwned(wrapper) || StatusLineWrapper.isPreviousVersion(wrapper) {
+            try? fileManager.removeItem(at: statusLineWrapperURL)
+        }
+        if (try? readStatusLineState()) != nil {
+            try? fileManager.removeItem(at: statusLineStateURL)
+        }
+    }
+
+    private func clearCostTrackingPreferences() {
+        UserDefaults.standard.set(false, forKey: Self.costTrackingKey)
+        DailyCostPreference.clear(from: .standard)
+        NotificationCenter.default.post(name: .notchBotCostTrackingDisabled, object: nil)
     }
 
     private func performInstallation(allowLegacyUpdate: Bool) {
@@ -101,6 +340,9 @@ final class IntegrationInstaller: ObservableObject {
                 allowLegacyUpdate: allowLegacyUpdate && outdated
             )
             try updateClaudeSettings(install: true)
+            if costTrackingEnabled {
+                try enableCostTrackingFiles()
+            }
             try writeInstallStatus()
             try removeLegacyPrivacyPolicyIfOwned()
             message = "OpenCode and Claude Code connected"
@@ -186,15 +428,18 @@ final class IntegrationInstaller: ObservableObject {
                 throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
             }
         }
-        try writeOpenCodePlugin(hookURL: hookURL)
+        try writeOpenCodePlugin(hookURL: hookURL, includeCostTracking: costTrackingEnabled)
     }
 
-    private func writeOpenCodePlugin(hookURL: URL) throws {
+    private func writeOpenCodePlugin(hookURL: URL, includeCostTracking: Bool) throws {
         try fileManager.createDirectory(
             at: openCodePluginURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let plugin = OpenCodePlugin.generate(hookPath: hookURL.path)
+        let plugin = OpenCodePlugin.generate(
+            hookPath: hookURL.path,
+            includeCostTracking: includeCostTracking
+        )
         try writeAtomically(Data(plugin.utf8), to: openCodePluginURL, permissions: 0o600)
     }
 
@@ -218,6 +463,15 @@ final class IntegrationInstaller: ObservableObject {
         let updatedSettings = install
             ? ClaudeHooks.merging(into: originalSettings, hookPath: NotchBotPaths.installedHookURL.path)
             : ClaudeHooks.removing(from: originalSettings, hookPath: NotchBotPaths.installedHookURL.path)
+        try replaceClaudeSettings(originalData: originalData, originalMode: originalMode, with: updatedSettings)
+    }
+
+    private func replaceClaudeSettings(
+        originalData: Data,
+        originalMode: Int,
+        with updatedSettings: [String: Any]
+    ) throws {
+        let settingsURL = claudeSettingsURL
         let updatedData = try JSONSerialization.data(
             withJSONObject: updatedSettings,
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -480,6 +734,14 @@ final class IntegrationInstaller: ObservableObject {
             throw IntegrationError.invalidManagedFile(url.path)
         }
         return value
+    }
+
+    private func stripShellQuoting(_ command: String) -> String {
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("'"), trimmed.hasSuffix("'"), trimmed.count >= 2 {
+            return String(trimmed.dropFirst().dropLast()).replacingOccurrences(of: "'\\''", with: "'")
+        }
+        return trimmed
     }
 
     private func decodeJSONObject(_ data: Data) throws -> [String: Any] {

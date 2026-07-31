@@ -88,6 +88,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
     public let taskLabel: String?
     public let permission: AgentPermissionRequest?
     public let request: AgentRequestUpdate?
+    public let costUSD: Double?
+    public let costGeneration: String?
 
     public init(
         source: AgentSource,
@@ -102,7 +104,9 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         expiresAfter: TimeInterval? = nil,
         taskLabel: String? = nil,
         permission: AgentPermissionRequest? = nil,
-        request: AgentRequestUpdate? = nil
+        request: AgentRequestUpdate? = nil,
+        costUSD: Double? = nil,
+        costGeneration: String? = nil
     ) {
         self.version = Self.protocolVersion
         self.source = source
@@ -118,6 +122,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.taskLabel = AgentTaskLabel.normalized(taskLabel)
         self.permission = permission
         self.request = request
+        self.costUSD = costUSD
+        self.costGeneration = costGeneration
     }
 
     public var isCompletionAttention: Bool {
@@ -145,6 +151,7 @@ public enum AgentEventValidationError: Error, Equatable, Sendable {
     case invalidProcessID
     case invalidPermission
     case invalidRequest
+    case invalidCost
 }
 
 public enum AgentEventValidator {
@@ -211,6 +218,17 @@ public enum AgentEventValidator {
         }
         if let processID = event.terminalProcessID, processID <= 0 {
             throw AgentEventValidationError.invalidProcessID
+        }
+        if let cost = event.costUSD {
+            guard event.kind == .metadata, event.source != .preview,
+                  cost.isFinite, (0...1_000_000).contains(cost) else {
+                throw AgentEventValidationError.invalidCost
+            }
+        }
+        if let generation = event.costGeneration {
+            guard event.costUSD != nil, validIdentifier(generation) else {
+                throw AgentEventValidationError.invalidCost
+            }
         }
     }
 

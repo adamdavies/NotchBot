@@ -9,30 +9,27 @@ struct AgentQueueView: View {
         VStack(spacing: 0) {
             HStack {
                 Text("Bots")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.95))
                 Spacer()
                 Text(queueSummary)
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
                 Button("Clear All") {
                     model.clearAllSessions()
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.68))
-                .padding(.horizontal, 7)
-                .frame(height: 22)
-                .background(Capsule().fill(Color.white.opacity(0.09)))
-                .overlay {
-                    Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1)
-                }
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.75))
+                .padding(.horizontal, 11)
+                .frame(height: 24)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.09)))
                 .help("Clear all queue entries")
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 18)
             .frame(height: 42)
 
-            Divider().overlay(.white.opacity(0.09))
+            Divider().overlay(.white.opacity(0.07))
 
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -52,7 +49,7 @@ struct AgentQueueView: View {
 
                         if index < model.activeSessions.count - 1 {
                             Divider()
-                                .overlay(.white.opacity(0.06))
+                                .overlay(.white.opacity(0.05))
                                 .padding(.leading, model.activeSessions[index + 1].isSubagent ? 54 : 36)
                         }
                     }
@@ -61,37 +58,28 @@ struct AgentQueueView: View {
 
             QueueProgressFooter(model: model)
         }
-        .frame(width: 380, height: queueHeight)
+        .frame(width: 420, height: queueHeight)
         .background(cardBackground)
         .contentShape(Rectangle())
         .onHover(perform: onHoverChanged)
     }
 
     private var cardBackground: some View {
-        UnevenRoundedRectangle(
-            topLeadingRadius: 4,
-            bottomLeadingRadius: 14,
-            bottomTrailingRadius: 14,
-            topTrailingRadius: 4
-        )
-        .fill(Color.black.opacity(0.96))
-        .overlay {
-            UnevenRoundedRectangle(
-                topLeadingRadius: 4,
-                bottomLeadingRadius: 14,
-                bottomTrailingRadius: 14,
-                topTrailingRadius: 4
-            )
-            .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        }
+        RoundedRectangle(cornerRadius: 22)
+            .fill(Color(red: 0.06, green: 0.06, blue: 0.067).opacity(0.94))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.45), radius: 25, y: 20)
     }
 
     private var queueSummary: String {
         let idleCount = model.activeSessions.filter { $0.state == .idle }.count
         if model.waitingAgentCount > 0 {
-            return "\(model.activeAgentCount) active · \(model.waitingAgentCount) need you"
+            return "\(model.activeAgentCount) running · \(model.waitingAgentCount) need you"
         }
-        return "\(model.activeAgentCount) active · \(idleCount) idle"
+        return "\(model.activeAgentCount) running · \(idleCount) idle"
     }
 
     private var queueHeight: CGFloat {
@@ -100,8 +88,8 @@ struct AgentQueueView: View {
     }
 
     private func rowHeight(for session: SessionActivity) -> CGFloat {
-        guard let permission = session.permission else { return 57 }
-        return permission.context == nil ? 106 : 126
+        guard let permission = session.permission else { return 70 }
+        return permission.context == nil ? 120 : 150
     }
 }
 
@@ -111,114 +99,125 @@ private struct AgentQueueRow: View {
     let onPermissionDecision: (AgentPermissionRequest, AgentPermissionDecision) -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            if session.isSubagent {
-                Image(systemName: "arrow.turn.down.right")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.3))
-                    .frame(width: 10)
-            }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                if session.isSubagent {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.3))
+                        .frame(width: 10)
+                }
 
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
 
-            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.95))
                     .lineLimit(1)
 
-                HStack(spacing: 5) {
-                    Text(sourceName)
-                    if let projectName {
-                        Text("·")
-                        Text(projectName)
-                    }
-                    if session.state == .attention, let reason = session.reason {
-                        Text("·")
-                        Text(reason)
-                    }
-                    if session.pendingRequestCount > 1 {
-                        Text("·")
-                        Text("\(session.pendingRequestCount) requests")
-                    }
-                }
-                .font(.system(size: 10, design: .rounded))
-                .foregroundStyle(.white.opacity(0.48))
-                .lineLimit(1)
+                Spacer(minLength: 8)
 
-                if let permission = session.permission {
-                    Text(permission.summary)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    if let context = permission.context {
-                        Text(context)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.82))
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                    }
-
-                    HStack(spacing: 6) {
-                        permissionButton("Allow Once", decision: .allowOnce, permission: permission)
-                        if permission.canAlwaysAllow {
-                            permissionButton("Always", decision: .alwaysAllow, permission: permission)
+                if session.permission == nil {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(statusText)
+                            .font(.system(size: 11, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.38))
+                        if !session.isSubagent, let cost = session.costUSD, cost > 0 {
+                            Text(String(format: "~$%.2f", cost))
+                                .font(.system(size: 10, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.28))
                         }
-                        permissionButton("Decline", decision: .decline, permission: permission, destructive: true)
                     }
-                    .padding(.top, 4)
+                }
+
+                Button(action: onClear) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.white.opacity(0.07)))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.5))
+                .accessibilityLabel("Clear \(title) from queue")
+                .help("Clear this queue entry")
+            }
+
+            HStack(spacing: 5) {
+                Text(sourceName)
+                if let projectName {
+                    Text("·")
+                    Text(projectName)
+                }
+                if session.state == .attention, let reason = session.reason {
+                    Text("·")
+                    Text(reason)
+                }
+                if session.pendingRequestCount > 1 {
+                    Text("·")
+                    Text("\(session.pendingRequestCount) requests")
                 }
             }
-
-            Spacer(minLength: 8)
-
-            if session.permission == nil {
-                Text(statusText)
-                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(statusColor)
-            }
-
-            Button(action: onClear) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
-                    .overlay {
-                        Circle().stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    }
-            }
-            .buttonStyle(.plain)
+            .font(.system(size: 12, design: .rounded))
             .foregroundStyle(.white.opacity(0.55))
-            .accessibilityLabel("Clear \(title) from queue")
-            .help("Clear this queue entry")
+            .lineLimit(1)
+            .padding(.leading, session.isSubagent ? 28 : 18)
+
+            if let permission = session.permission {
+                Text(permission.summary)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.leading, session.isSubagent ? 28 : 18)
+
+                if let context = permission.context {
+                    Text(context)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .padding(.leading, session.isSubagent ? 28 : 18)
+                }
+
+                HStack(spacing: 8) {
+                    permissionButton("Allow Once", decision: .allowOnce, permission: permission, primary: true)
+                    if permission.canAlwaysAllow {
+                        permissionButton("Always", decision: .alwaysAllow, permission: permission)
+                    }
+                    permissionButton("Decline", decision: .decline, permission: permission, destructive: true)
+                }
+                .padding(.leading, session.isSubagent ? 28 : 18)
+                .padding(.top, 2)
+            }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
     }
 
     private func permissionButton(
         _ title: String,
         decision: AgentPermissionDecision,
         permission: AgentPermissionRequest,
+        primary: Bool = false,
         destructive: Bool = false
     ) -> some View {
         Button(title) {
             onPermissionDecision(permission, decision)
         }
         .buttonStyle(.plain)
-        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+        .font(.system(size: 11, weight: .bold, design: .rounded))
         .foregroundStyle(destructive ? Color.red.opacity(0.9) : Color.white.opacity(0.9))
-        .padding(.horizontal, 8)
-        .frame(height: 23)
+        .padding(.horizontal, 12)
+        .frame(height: 25)
         .background(
-            Capsule().fill(destructive ? Color.red.opacity(0.14) : Color.white.opacity(0.11))
+            RoundedRectangle(cornerRadius: 8).fill(
+                primary ? Color(red: 0.22, green: 0.55, blue: 0.38)
+                : destructive ? Color.red.opacity(0.14)
+                : Color.white.opacity(0.08)
+            )
         )
-        .overlay {
-            Capsule().stroke(destructive ? Color.red.opacity(0.3) : Color.white.opacity(0.15), lineWidth: 1)
-        }
     }
 
     private var title: String {
@@ -236,9 +235,9 @@ private struct AgentQueueRow: View {
 
     private var statusColor: Color {
         switch session.state {
-        case .attention: .yellow
-        case .working: Color(red: 0.34, green: 0.72, blue: 1)
-        case .idle: .white.opacity(0.28)
+        case .attention: Color(red: 0.82, green: 0.65, blue: 0.28)
+        case .working: Color(red: 0.28, green: 0.52, blue: 0.82)
+        case .idle: Color(red: 0.32, green: 0.68, blue: 0.48)
         }
     }
 

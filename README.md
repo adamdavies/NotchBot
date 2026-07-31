@@ -6,19 +6,19 @@
 
 NotchBot is a native macOS menu-bar companion for AI coding agents. It extends a MacBook notch with a pixel robot that sleeps with drifting Zs while idle, walks while an agent is working, and jumps with a yellow pulse when an agent needs attention.
 
-Version 0.2.5 supports OpenCode and Claude Code on Apple Silicon Macs running macOS 14 or later.
+Version 0.3.0 supports OpenCode and Claude Code on Apple Silicon Macs running macOS 14 or later.
 
 ## Install
 
-Download `NotchBot-0.2.5.dmg` and `NotchBot-0.2.5.dmg.sha256` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), verify the checksum, open the DMG, and move NotchBot into `/Applications`.
+Download `NotchBot-0.3.0.dmg` and `NotchBot-0.3.0.dmg.sha256` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), verify the checksum, open the DMG, and move NotchBot into `/Applications`.
 
 ```sh
-shasum -a 256 -c NotchBot-0.2.5.dmg.sha256
+shasum -a 256 -c NotchBot-0.3.0.dmg.sha256
 ```
 
 Developer ID signing and notarization are preferred. When those credentials are unavailable, an explicitly produced ad-hoc release may require right-clicking NotchBot and selecting **Open**; the release notes identify that status.
 
-Open the fixed robot menu-bar icon and select **Install Integrations** for a first installation. After updating NotchBot, including to v0.2.5, select **Update Integrations** and restart all running OpenCode and Claude Code sessions so they load the current integration.
+Open the fixed robot menu-bar icon and select **Install Integrations** for a first installation. After updating NotchBot, including to v0.3.0, select **Update Integrations** and restart all running OpenCode and Claude Code sessions so they load the current integration.
 
 ## Current Features
 
@@ -26,16 +26,17 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 - Automatic, per-display, and all-display placement, including a menu-bar-height synthetic notch for clamshell mode and external displays
 - Selectable **Retro Bot**, **Blob Bot**, **Orb Bot**, and **Cat Bot** characters, with Retro Bot as the default
 - A fixed robot menu-bar icon that remains consistent when the notch character changes
-- Character, display, and daily coolness persistence in `UserDefaults`, storing validated preferences plus only the local day and aggregate completion count
+- Character, display, daily coolness, and opt-in estimated daily spend persistence in `UserDefaults`
 - Concurrent session tracking with attention taking priority over working activity
 - Live agent count opposite the robot, with a yellow waiting badge
 - Click the compact notch panel to focus Terminal, iTerm2, Warp, Ghostty, or Kitty
-- Hover shows a queue of tracked sessions marked Idle, Working, or Needs You
+- Hover shows a redesigned queue of tracked sessions marked Idle, Working, or Needs You, plus daily level progress even when the queue is empty
 - Subagents are grouped beneath their parent task and count as active bots; successful subagent completion removes the child without triggering attention
 - Permission rows separate the requested scope from bounded native command, path, or resource context and include **Allow Once**, **Always**, and **Decline** controls; Claude's **Always** control appears only for one unambiguous native suggestion
 - Questions, completion, and errors remain presentation-only attention; clicking a permission row or the compact bot focuses the terminal without submitting or hiding the request
 - After a permission response is submitted, its controls disappear while Needs You remains until the provider reports that work resumed
 - Daily coolness tiers at 25, 50, and 100 observed top-level completions add a cumulative cyan isometric glow plate, neon shades, and a gold crown, resetting at local midnight
+- Optional local estimated spend tracking for OpenCode and Claude Code, with per-session estimates and a daily total that resets at local midnight
 - When no sessions are tracked, idle hover shows an empty queue state instead of retaining completed response text
 - Bounded task labels selected from OpenCode session titles or project metadata and Claude Code's existing `session_title`, `agent_type`, or project-directory basename
 - Local Unix datagram transport with no telemetry, analytics, or intentional Internet requests
@@ -164,31 +165,33 @@ NOTARIZE=1 NOTARY_PROFILE="notchbot-notary" scripts/create-dmg.sh
 
 ## Integration Files
 
-NotchBot's v0.2.5 integration and local transport use these paths:
+NotchBot's v0.3.0 integration and local transport use these paths:
 
 - `~/Library/Application Support/NotchBot/bin/notchbot-hook`
 - `~/Library/Application Support/NotchBot/bin/notchbot-hook.notchbot-owner`
+- `~/Library/Application Support/NotchBot/bin/notchbot-statusline` (only while cost tracking is enabled)
+- `~/Library/Application Support/NotchBot/statusline-state.json` (only while cost tracking is enabled)
 - `~/Library/Application Support/NotchBot/integration-installation.json`
 - `~/Library/Application Support/NotchBot/integration-backups/claude-settings-<UUID>.backup` (transactional, normally removed after verification)
 - `~/Library/Application Support/NotchBot/event.key`
 - `~/Library/Application Support/NotchBot/instance.lock`
 - `~/Library/Application Support/NotchBot/notchbot.sock`
 - `~/.config/opencode/plugins/notchbot.js`
-- `~/.claude/settings.json` (NotchBot command handlers are merged into its `hooks` object)
+- `~/.claude/settings.json` (NotchBot handlers are merged into `hooks`; opt-in cost tracking also wraps `statusLine`)
 
-Before changing Claude Code settings, NotchBot creates a restrictive transactional backup under `~/Library/Application Support/NotchBot/integration-backups/`. It removes the backup after verifying a successful update and leaves it for recovery if the update fails. Removal verifies generated markers and exact managed hook definitions before deleting files. These checks reduce accidental replacement but cannot protect against a malicious process running as the same user. A legacy `~/.claude/settings.json.notchbot-backup` created by v0.1.0 is left untouched and can be reviewed or removed manually after migration.
+Before changing Claude Code settings, NotchBot creates a restrictive transactional backup under `~/Library/Application Support/NotchBot/integration-backups/`. It removes the backup after verifying a successful update and leaves it for recovery if the update fails. When cost tracking is enabled, NotchBot stores the complete prior status-line configuration, preserves its options and output, and restores it when tracking is disabled. Removal verifies generated markers and managed configuration before deleting files. These checks reduce accidental replacement but cannot protect against a malicious process running as the same user. A legacy `~/.claude/settings.json.notchbot-backup` created by v0.1.0 is left untouched and can be reviewed or removed manually after migration.
 
 ## Privacy
 
 NotchBot is local-only by design. It has no telemetry or analytics and makes no intentional Internet requests. OpenCode and Claude Code have their own network behavior, which is outside NotchBot's control.
 
-The integrations send encrypted, authenticated lifecycle events containing source, session identifier, optional parent-session identifier, working-directory path, terminal identifier, reason, expiry, a bounded task label, and optional permission metadata over the local Unix datagram socket at `~/Library/Application Support/NotchBot/notchbot.sock`. OpenCode hierarchy comes from its session `parentID`; Claude Code hierarchy comes from its documented `agent_id` and parent `session_id` hook fields. OpenCode labels come from its session title or project metadata. Claude Code labels come from the existing `session_title` or `agent_type` hook fields, falling back to the project-directory basename. Outside bounded native permission context, NotchBot does not select prompt fields, transcripts, task subjects, task descriptions, or assistant response text. OpenCode or Claude Code may themselves generate a session title from conversation content before exposing that metadata. Labels are displayed in the hover queue, retained only in process memory, and never written to disk by NotchBot. Daily coolness persists only a local date identifier and aggregate completion count in `UserDefaults`; source-qualified session identifiers used to suppress duplicate completions remain in memory and are discarded on reset or quit. NotchBot uses the working-directory path to display a project name and focus a terminal; it does not traverse or read arbitrary project files.
+The integrations send encrypted, authenticated lifecycle events containing source, session identifier, optional parent-session identifier, working-directory path, terminal identifier, reason, expiry, a bounded task label, and optional permission metadata over the local Unix datagram socket at `~/Library/Application Support/NotchBot/notchbot.sock`. When cost tracking is explicitly enabled, events may also contain a provider-reported estimated USD cost and an opaque OpenCode process generation identifier used for deduplication. OpenCode hierarchy comes from its session `parentID`; Claude Code hierarchy comes from its documented `agent_id` and parent `session_id` hook fields. Outside bounded native permission context, NotchBot does not select prompt fields, transcripts, task subjects, task descriptions, assistant response text, or token details. Labels appear in the hover queue and remain in memory. Daily coolness stores a local date and aggregate completion count in `UserDefaults`. Estimated daily spend stores the local date, total, and bounded source-qualified cost baselines needed to process cumulative updates across restarts and midnight; inactive baselines are pruned. NotchBot uses the working-directory path to display a project name and focus a terminal; it does not traverse or read arbitrary project files.
 
-Claude Code supplies its hook event JSON to `notchbot-hook` on standard input. The shared decoder accepts bounded lifecycle, task-label, and OpenCode request/permission fields while ignoring other keys; Claude permission handling separately selects bounded native permission fields. Source-specific handling uses `agent_id` only for Claude hierarchy and `parent_session_id` only for OpenCode hierarchy. The helper accepts at most 64 KiB, reading one additional byte only to detect overflow. Prompt, transcript, and response fields can still reach the helper process as part of Claude's raw stdin, but NotchBot does not select, retain, or forward them. The OpenCode plugin does not pass through raw events or assistant messages: it constructs an allowlisted stdin payload containing lifecycle, task-label, request, and bounded permission metadata only.
+Claude Code supplies its hook JSON, and while cost tracking is enabled its documented status-line JSON, to `notchbot-hook` on standard input. The decoders accept only allowlisted bounded fields and the numeric estimated session cost. Prompt, transcript, response, model, context-window, rate-limit, and token fields can reach the helper process in raw Claude input but are not selected, retained, or forwarded. The helper accepts at most 64 KiB, reading one additional byte only to detect overflow. The OpenCode plugin does not pass through raw events or assistant messages: it constructs an allowlisted payload and, only after opt-in, reads numeric assistant-message cost estimates.
 
 The socket is readable and writable only by the current macOS user. This protects against other local user accounts, not other processes running as the same user: a same-user process can inspect integration files or forge local events. See [SECURITY.md](SECURITY.md) for the full threat model.
 
-NotchBot 0.2.5 is not App Sandbox enabled. Sandboxing is deferred to v0.3.0; the 0.2.5 signature intentionally requests no entitlements.
+NotchBot 0.3.0 is not App Sandbox enabled and requests no signing entitlements.
 
 ## License
 

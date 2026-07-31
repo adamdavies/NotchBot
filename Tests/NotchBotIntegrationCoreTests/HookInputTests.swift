@@ -172,3 +172,68 @@ import Testing
         try HookInput.decodePayload(from: invalid)
     }
 }
+
+@Test func statusLineModeRequiresMetadataKind() throws {
+    let valid = try HookInput.parse(arguments: [
+        "--source", "claude", "--kind", "metadata", "--mode", "statusline",
+    ])
+    #expect(valid.statusLine)
+    #expect(!valid.permissionRequest)
+
+    #expect(throws: HookInputError.invalidArguments) {
+        try HookInput.parse(arguments: [
+            "--source", "claude", "--kind", "working", "--mode", "statusline",
+        ])
+    }
+}
+
+@Test func statusLinePayloadExtractsCost() throws {
+    let data = Data("""
+    {
+      "session_id": "abc123",
+      "cost": { "total_cost_usd": 1.23 },
+      "context_window": { "total_input_tokens": 5000, "total_output_tokens": 1200 },
+      "model": { "id": "claude-sonnet-4-20250514", "display_name": "Sonnet" }
+    }
+    """.utf8)
+    let payload = try HookInput.decodeStatusLinePayload(from: data)
+
+    #expect(payload?.sessionID == "abc123")
+    #expect(payload?.costUSD == 1.23)
+}
+
+@Test func statusLinePayloadHandlesMissingFields() throws {
+    let minimal = try HookInput.decodeStatusLinePayload(from: Data("{}".utf8))
+    #expect(minimal?.sessionID == nil)
+    #expect(minimal?.costUSD == nil)
+
+    let empty = try HookInput.decodeStatusLinePayload(from: Data())
+    #expect(empty == nil)
+}
+
+@Test func statusLinePayloadRejectsInvalidCost() throws {
+    let negative = Data("""
+    {"session_id":"s1","cost":{"total_cost_usd":-1.0}}
+    """.utf8)
+    let payload = try HookInput.decodeStatusLinePayload(from: negative)
+    #expect(payload?.costUSD == nil)
+}
+
+@Test func hookPayloadCarriesCostFields() throws {
+    let data = Data("""
+    {"session_id":"s1","cost_usd":0.42,"cost_generation":"launch-1","input_tokens":1000,"output_tokens":500}
+    """.utf8)
+    let payload = try HookInput.decodePayload(from: data)
+
+    #expect(payload?.costUSD == 0.42)
+    #expect(payload?.costGeneration == "launch-1")
+}
+
+@Test func hookPayloadRejectsNegativeCostFields() throws {
+    let data = Data("""
+    {"session_id":"s1","cost_usd":-1.0,"input_tokens":-5,"output_tokens":-10}
+    """.utf8)
+    let payload = try HookInput.decodePayload(from: data)
+
+    #expect(payload?.costUSD == nil)
+}

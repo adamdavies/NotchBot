@@ -1,13 +1,62 @@
 import Foundation
 
 public enum OpenCodePlugin {
-    public static func generate(hookPath: String) -> String {
+    public static func generate(hookPath: String, includeCostTracking: Bool = false) -> String {
         let pathLiteral = jsonString(hookPath)
+        let costState = includeCostTracking ? """
+        const costGeneration = crypto.randomUUID()
+        const sessionCosts = new Map()
+        const messageCosts = new Map()
+        """ : ""
+        let costPayload = includeCostTracking ? """
+          if (cost) {
+            if (typeof cost.costUSD === "number" && cost.costUSD >= 0) payload.cost_usd = cost.costUSD
+            payload.cost_generation = costGeneration
+          }
+        """ : ""
+        let costEvent = includeCostTracking ? """
+            if (event.type === "message.updated") {
+              const message = properties.info
+              const sid = identifier(message?.sessionID)
+              const messageID = identifier(message?.id)
+              if (!sid || !messageID || message?.role !== "assistant") return
+              const cost = typeof message.cost === "number" && Number.isFinite(message.cost) && message.cost >= 0
+                ? message.cost
+                : null
+              if (cost == null) return
+              const messageKey = JSON.stringify([sid, messageID])
+              const previous = messageCosts.get(messageKey) ?? 0
+              if (cost === previous) return
+              if (!setCostBaseline(messageCosts, messageKey, cost)) return
+              const sessionCost = Math.max(0, (sessionCosts.get(sid) ?? 0) + cost - previous)
+              if (!setCostBaseline(sessionCosts, sid, sessionCost)) return
+              send(
+                "metadata",
+                sid,
+                sessionParents.get(sid),
+                null,
+                directory,
+                null,
+                taskLabels.get(sid) ?? fallbackTaskLabel,
+                null,
+                { costUSD: sessionCost },
+              )
+              return
+            }
+
+        """ : ""
+        let costCleanup = includeCostTracking ? """
+              sessionCosts.delete(sessionID)
+              for (const key of messageCosts.keys()) {
+                if (JSON.parse(key)[0] === sessionID) messageCosts.delete(key)
+              }
+        """ : ""
 
         return """
         // \(NotchBotIntegrationFiles.generatedMarker). Do not edit.
         const hookPath = \(pathLiteral)
         const taskLabels = new Map()
+        \(costState)
         const sessionParents = new Map()
         const completedSessions = new Set()
         const knownRequests = new Map()
@@ -42,6 +91,12 @@ public enum OpenCodePlugin {
         function addBounded(set, value) {
           if (!set.has(value) && set.size >= 256) set.delete(set.values().next().value)
           set.add(value)
+        }
+
+        function setCostBaseline(map, key, value) {
+          if (!map.has(key) && map.size >= 10000) return false
+          map.set(key, value)
+          return true
         }
 
         function nativeRequestID(properties) {
@@ -117,7 +172,7 @@ public enum OpenCodePlugin {
           return patterns.some((pattern) => permissionText(pattern) === context) ? null : context
         }
 
-        function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, label, request) {
+        function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, label, request, cost) {
           sessionID = identifier(sessionID)
           if (!sessionID) return
           parentSessionID = identifier(parentSessionID)
@@ -135,6 +190,7 @@ public enum OpenCodePlugin {
             payload.request_kind = request.kind
             payload.request_state = request.state
           }
+        \(costPayload)
           sendQueue = sendQueue.then(async () => {
             try {
               const child = Bun.spawn(args, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
@@ -293,6 +349,7 @@ public enum OpenCodePlugin {
           return {
           event: async ({ event }) => {
             const properties = event.properties ?? {}
+        \(costEvent)
             const sessionID = identifier(properties.sessionID ?? properties.info?.id)
             if (!sessionID) return
 
@@ -304,6 +361,7 @@ public enum OpenCodePlugin {
               setBounded(sessionGenerations, sessionID, {})
               sendEvent("cleared", sessionID, null, null)
               taskLabels.delete(sessionID)
+        \(costCleanup)
               sessionParents.delete(sessionID)
               completedSessions.delete(sessionID)
               for (const [key, requestSessionID] of knownRequests) {

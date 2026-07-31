@@ -33,6 +33,8 @@ public struct SessionActivity: Equatable, Identifiable, Sendable {
     public var providerUpdatedAt: Date
     public var hasProviderActivity: Bool
 
+    public var costUSD: Double?
+
     public var id: String { "\(source.rawValue):\(sessionID)" }
     public var isSubagent: Bool { parentSessionID != nil }
     public var pendingRequestCount: Int { pendingRequests.count }
@@ -69,6 +71,7 @@ public struct ActivityReducer: Sendable {
         }
         let latest = event.kind == .metadata ? latestMetadataAt[key] : latestEventAt[key]
         guard latest.map({ event.timestamp > $0 }) ?? true else { return false }
+        guard latestClearedAt[key].map({ event.timestamp > $0 }) ?? true else { return false }
         guard let parentSessionID = event.parentSessionID else { return true }
         let parentKey = Self.key(source: event.source, sessionID: parentSessionID)
         return latestClearedAt[parentKey].map { event.timestamp > $0 } ?? true
@@ -129,7 +132,11 @@ public struct ActivityReducer: Sendable {
                 if let parentSessionID, event.timestamp >= sessions[key]!.updatedAt {
                     sessions[key]?.parentSessionID = parentSessionID
                 }
-            } else if parentClearedAt == nil && (event.taskLabel != nil || parentSessionID != nil) {
+                if let cost = event.costUSD, cost >= 0 {
+                    sessions[key]?.costUSD = cost
+                }
+            } else if parentClearedAt == nil
+                && (event.taskLabel != nil || parentSessionID != nil || event.costUSD != nil) {
                 if pendingMetadata[key] == nil, pendingMetadata.count >= Self.maximumSessions,
                    let oldest = pendingMetadata.min(by: { $0.value.updatedAt < $1.value.updatedAt })?.key {
                     pendingMetadata.removeValue(forKey: oldest)
@@ -139,6 +146,7 @@ public struct ActivityReducer: Sendable {
                     source: event.source,
                     taskLabel: event.taskLabel ?? pendingMetadata[key]?.taskLabel,
                     parentSessionID: parentSessionID ?? pendingMetadata[key]?.parentSessionID,
+                    costUSD: [event.costUSD, pendingMetadata[key]?.costUSD].compactMap { $0 }.max(),
                     updatedAt: event.timestamp
                 )
             }
@@ -214,7 +222,8 @@ public struct ActivityReducer: Sendable {
                 providerState: providerState,
                 providerReason: providerReason,
                 providerUpdatedAt: providerUpdatedAt,
-                hasProviderActivity: hasProviderActivity
+                hasProviderActivity: hasProviderActivity,
+                costUSD: previousSession?.costUSD ?? pendingMetadata[key]?.costUSD
             )
             pendingMetadata.removeValue(forKey: key)
         }
@@ -514,6 +523,7 @@ private struct PendingMetadata: Sendable {
     let source: AgentSource
     let taskLabel: String?
     let parentSessionID: String?
+    let costUSD: Double?
     let updatedAt: Date
 }
 

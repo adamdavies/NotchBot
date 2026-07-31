@@ -30,6 +30,31 @@ do {
 }
 
 let input = FileHandle.standardInput.readData(ofLength: HookInput.maximumByteCount + 1)
+
+if options.statusLine {
+    let statusLinePayload: StatusLinePayload?
+    do {
+        statusLinePayload = try HookInput.decodeStatusLinePayload(from: input)
+    } catch {
+        exit(65)
+    }
+    guard let statusLinePayload, statusLinePayload.costUSD != nil else { exit(0) }
+    let environment = ProcessInfo.processInfo.environment
+    let sessionID = statusLinePayload.sessionID
+        ?? bounded(environment["CLAUDE_SESSION_ID"], bytes: 128)
+        ?? "claude-\(getppid())"
+    let event = AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: sessionID,
+        costUSD: statusLinePayload.costUSD
+    )
+    do {
+        try UnixDatagramClient.send(JSONEncoder().encode(event))
+    } catch {}
+    exit(0)
+}
+
 let payload: HookPayload?
 do {
     payload = try HookInput.decodePayload(from: input)
@@ -115,7 +140,9 @@ let event = AgentEvent(
     expiresAfter: options.expiresAfter,
     taskLabel: taskLabel,
     permission: permission,
-    request: request
+    request: request,
+    costUSD: payload?.costUSD,
+    costGeneration: payload?.costGeneration
 )
 
 do {

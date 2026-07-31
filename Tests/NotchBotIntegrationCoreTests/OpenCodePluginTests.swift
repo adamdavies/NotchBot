@@ -6,7 +6,6 @@ import Testing
         hookPath: "/Users/test/Library/Application Support/NotchBot/bin/notchbot-hook"
     )
 
-    #expect(!plugin.contains("message.updated"))
     #expect(!plugin.contains("message.part.updated"))
     #expect(!plugin.contains("properties.part.text"))
     #expect(!plugin.contains("latestResponses"))
@@ -16,6 +15,26 @@ import Testing
     #expect(!plugin.contains("--summary"))
     #expect(plugin.contains("stdin: \"pipe\""))
     #expect(plugin.contains("JSON.stringify(payload)"))
+    #expect(!plugin.contains("event.type === \"message.updated\""))
+    #expect(!plugin.contains("payload.cost_usd"))
+}
+
+@Test func pluginCostTrackingIsOptInAndDeduplicatesMessageUpdates() {
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", includeCostTracking: true)
+
+    #expect(plugin.contains("event.type === \"message.updated\""))
+    #expect(plugin.contains("const message = properties.info"))
+    #expect(plugin.contains("identifier(message?.sessionID)"))
+    #expect(plugin.contains("const messageCosts = new Map()"))
+    #expect(plugin.contains("const costGeneration = crypto.randomUUID()"))
+    #expect(plugin.contains("const previous = messageCosts.get(messageKey) ?? 0"))
+    #expect(plugin.contains("+ cost - previous"))
+    #expect(plugin.contains("map.size >= 10000) return false"))
+    #expect(plugin.contains("if (!setCostBaseline(messageCosts, messageKey, cost)) return"))
+    #expect(plugin.contains("payload.cost_usd = cost.costUSD"))
+    #expect(plugin.contains("payload.cost_generation = costGeneration"))
+    #expect(!plugin.contains("payload.input_tokens"))
+    #expect(!plugin.contains("payload.output_tokens"))
 }
 
 @Test func pluginBoundsLifecycleStateAndHandlesRejectedQuestions() {

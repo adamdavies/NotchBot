@@ -47,7 +47,7 @@ public enum ClaudeHooks {
             let remaining = groups.compactMap { group -> [String: Any]? in
                 guard let handlers = group["hooks"] as? [[String: Any]] else { return group }
                 let kept = handlers.filter {
-                    !isOwnedHandler($0, event: event, matcher: group["matcher"] as? String, hookPath: hookPath)
+                    !isReclaimableHandler($0, event: event, matcher: group["matcher"] as? String, hookPath: hookPath)
                 }
                 guard !kept.isEmpty else { return nil }
                 var updated = group
@@ -57,6 +57,24 @@ public enum ClaudeHooks {
             if !remaining.isEmpty { result[event] = remaining }
         }
         return result
+    }
+
+    /// Handlers we clean up before rewriting our own. Looser than `isOwnedHandler` so that
+    /// malformed entries pointing at our helper are reclaimed rather than accumulating: an
+    /// entry without `args` runs through a shell, and the space in "Application Support"
+    /// splits the path, so Claude Code reports "No such file or directory" on every event.
+    private static func isReclaimableHandler(
+        _ handler: [String: Any],
+        event: String,
+        matcher: String?,
+        hookPath: String
+    ) -> Bool {
+        if isOwnedHandler(handler, event: event, matcher: matcher, hookPath: hookPath) { return true }
+        guard
+            handler["type"] as? String == "command",
+            handler["command"] as? String == hookPath
+        else { return false }
+        return !(handler["args"] is [String])
     }
 
     private static func isOwnedHandler(
