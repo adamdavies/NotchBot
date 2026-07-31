@@ -949,3 +949,27 @@ import Testing
     ))
     #expect(reducer.primarySession?.costUSD == 0.08)
 }
+
+@Test func resolvedRequestClearsStaleProviderReason() {
+    var reducer = ActivityReducer()
+    let start = Date(timeIntervalSince1970: 100)
+
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "s1", timestamp: start))
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .attention, sessionID: "s1",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode needs permission",
+        request: AgentRequestUpdate(id: "r1", kind: .permission, state: .opened)
+    ))
+    #expect(reducer.primarySession?.state == .attention)
+    #expect(reducer.primarySession?.reason == "OpenCode needs permission")
+
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .requestResolved, sessionID: "s1",
+        timestamp: start.addingTimeInterval(2),
+        request: AgentRequestUpdate(id: "r1", kind: .permission, state: .resolved)
+    ))
+    #expect(reducer.primarySession?.state == .working)
+    #expect(reducer.primarySession?.reason == nil)
+    #expect(reducer.primarySession?.permission == nil)
+}

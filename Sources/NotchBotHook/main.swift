@@ -55,12 +55,7 @@ if options.statusLine {
     exit(0)
 }
 
-let payload: HookPayload?
-do {
-    payload = try HookInput.decodePayload(from: input)
-} catch {
-    exit(65)
-}
+let payload = try? HookInput.decodePayload(from: input)
 
 let environment = ProcessInfo.processInfo.environment
 let source = AgentSource(rawValue: options.source)!

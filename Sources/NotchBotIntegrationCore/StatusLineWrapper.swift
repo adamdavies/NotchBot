@@ -74,13 +74,15 @@ public enum StatusLineWrapper {
 
     public static func extractChainedCommand(_ contents: String) -> String? {
         let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let lastPipeLine = lines.last(where: {
-            $0.hasPrefix("printf '%s' \"$input\" |") && !$0.contains("--mode statusline")
-        }) else {
+        let prefix = "original_command="
+        guard let assignmentLine = lines.first(where: { $0.hasPrefix(prefix) }) else {
             return nil
         }
-        let command = lastPipeLine.drop(while: { $0 != "|" }).dropFirst().trimmingCharacters(in: .whitespaces)
-        return command.isEmpty ? nil : command
+        let value = String(assignmentLine.dropFirst(prefix.count))
+        let unquoted = value.hasPrefix("'") && value.hasSuffix("'") && value.count >= 2
+            ? String(value.dropFirst().dropLast()).replacingOccurrences(of: "'\\''", with: "'")
+            : value
+        return unquoted.isEmpty ? nil : unquoted
     }
 
     private static func shellEscaped(_ value: String) -> String {
