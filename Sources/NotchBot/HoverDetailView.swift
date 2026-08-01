@@ -14,7 +14,8 @@ struct HoverDetailView: View {
                 AgentQueueView(model: model, onHoverChanged: onHoverChanged)
             }
         }
-        .padding(Self.shadowPadding)
+        .padding(.horizontal, Self.shadowPadding)
+        .padding(.bottom, Self.shadowPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }

@@ -33,8 +33,8 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 - Hover shows a redesigned queue of tracked sessions marked Idle, Working, or Needs You, plus daily level progress even when the queue is empty
 - Subagents are grouped beneath their parent task and count as active bots; successful subagent completion removes the child without triggering attention
 - Permission rows separate the requested scope from bounded native command, path, or resource context and include **Allow Once**, **Always**, and **Decline** controls; Claude's **Always** control appears only for one unambiguous native suggestion
-- Questions, completion, and errors remain presentation-only attention; clicking a permission row or the compact bot focuses the terminal without submitting or hiding the request
-- After a permission response is submitted, its controls disappear while Needs You remains until the provider reports that work resumed
+- Clicking an attention row or the compact bot acknowledges its current attention state, stops the Needs You presentation, and focuses the terminal without submitting or hiding any unresolved request
+- A duplicate event for an acknowledged request stays quiet, while a new request restores Needs You; after a permission response is submitted, its controls disappear until the provider reports resolution
 - Daily coolness tiers at 25, 50, and 100 observed top-level completions add a cumulative cyan isometric glow plate, neon shades, and a gold crown, resetting at local midnight
 - Optional local estimated spend tracking for OpenCode and Claude Code, with per-session estimates and a daily total that resets at local midnight
 - When no sessions are tracked, idle hover shows an empty queue state instead of retaining completed response text

@@ -178,9 +178,7 @@ final class ActivityModel: ObservableObject {
             focusMostRecentTerminal()
             return
         }
-        if !primarySession.isAwaitingPermissionResolution {
-            acknowledgeAttention(for: primarySession)
-        }
+        acknowledgeAttention(for: primarySession)
         focusTerminal(for: primarySession)
     }
 
@@ -198,9 +196,7 @@ final class ActivityModel: ObservableObject {
     }
 
     func acknowledgeAndFocus(_ session: SessionActivity) {
-        if !session.isAwaitingPermissionResolution {
-            acknowledgeAttention(for: session)
-        }
+        acknowledgeAttention(for: session)
         focusTerminal(for: session)
     }
 
@@ -320,7 +316,6 @@ final class ActivityModel: ObservableObject {
     }
 
     private func acknowledgeAttention(for session: SessionActivity) {
-        guard session.state == .attention else { return }
         let sessionKey = session.id
         expiryTasks.removeValue(forKey: sessionKey)?.cancel()
         let change = reducer.acknowledgeAttention(source: session.source, sessionID: session.sessionID)

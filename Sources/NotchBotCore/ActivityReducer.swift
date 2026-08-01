@@ -54,6 +54,8 @@ public struct ActivityReducer: Sendable {
     private var latestMetadataAt: [String: Date] = [:]
     private var latestRequestAt: [RequestEventKey: Date] = [:]
     private var resolvedRequests: Set<RequestEventKey> = []
+    private var acknowledgedRequests: Set<RequestEventKey> = []
+    private var acknowledgedLegacyPermissions: Set<String> = []
     private var latestClearedAt: [String: Date] = [:]
     private var pendingMetadata: [String: PendingMetadata] = [:]
 
@@ -151,7 +153,9 @@ public struct ActivityReducer: Sendable {
                 )
             }
         } else if event.kind == .requestResolved, let request = event.request {
-            resolvedRequests.insert(Self.requestKey(event: event, request: request))
+            let requestKey = Self.requestKey(event: event, request: request)
+            resolvedRequests.insert(requestKey)
+            acknowledgedRequests.remove(requestKey)
             if var session = sessions[key] {
                 session.pendingRequests.removeAll { $0.id == request.id && $0.kind == request.kind }
                 session.updatedAt = max(event.timestamp, session.updatedAt)
@@ -200,6 +204,16 @@ public struct ActivityReducer: Sendable {
             let presentedRequest = pendingRequests.first(where: { $0.permission != nil })
             let displayedRequest = presentedRequest ?? pendingRequests.first
             let hasPendingRequests = !pendingRequests.isEmpty
+            let hasUnacknowledgedRequests = pendingRequests.contains {
+                !acknowledgedRequests.contains(Self.requestKey(
+                    source: event.source,
+                    sessionID: event.sessionID,
+                    request: $0
+                ))
+            }
+            let legacyPermissionIsAcknowledged = legacyPermission.map {
+                acknowledgedLegacyPermissions.contains($0.responseToken)
+            } ?? false
             let providerUpdatedAt = opensRequest
                 ? previousSession?.providerUpdatedAt ?? event.timestamp
                 : event.timestamp
@@ -208,7 +222,9 @@ public struct ActivityReducer: Sendable {
                 source: event.source,
                 sessionID: event.sessionID,
                 parentSessionID: parentSessionID,
-                state: hasPendingRequests ? .attention : providerState,
+                state: hasPendingRequests
+                    ? (hasUnacknowledgedRequests ? .attention : .idle)
+                    : (legacyPermissionIsAcknowledged ? .idle : providerState),
                 updatedAt: max(event.timestamp, previousSession?.updatedAt ?? .distantPast),
                 workingDirectory: event.workingDirectory ?? sessions[key]?.workingDirectory,
                 terminalBundleIdentifier: event.terminalBundleIdentifier ?? sessions[key]?.terminalBundleIdentifier,
@@ -260,6 +276,9 @@ public struct ActivityReducer: Sendable {
         latestMetadataAt = latestMetadataAt.filter { $0.value >= cutoff }
         latestRequestAt = latestRequestAt.filter { $0.value >= cutoff }
         resolvedRequests = resolvedRequests.filter { latestRequestAt[$0] != nil }
+        acknowledgedRequests = acknowledgedRequests.filter { latestRequestAt[$0] != nil }
+        let activePermissionTokens = Set(sessions.values.compactMap { $0.permission?.responseToken })
+        acknowledgedLegacyPermissions.formIntersection(activePermissionTokens)
         latestClearedAt = latestClearedAt.filter { $0.value >= cutoff }
         pendingMetadata = pendingMetadata.filter { $0.value.updatedAt >= cutoff }
     }
@@ -283,13 +302,20 @@ public struct ActivityReducer: Sendable {
     @discardableResult
     public mutating func acknowledgeAttention(source: AgentSource, sessionID: String) -> ActivityChange {
         let key = Self.key(source: source, sessionID: sessionID)
-        guard let session = sessions[key], session.state == .attention, session.pendingRequests.isEmpty else {
+        guard let session = sessions[key], session.state == .attention else {
             return currentChange()
         }
+        for request in session.pendingRequests {
+            acknowledgedRequests.insert(Self.requestKey(source: source, sessionID: sessionID, request: request))
+        }
+        if session.pendingRequests.isEmpty, let permission = session.permission {
+            acknowledgedLegacyPermissions.insert(permission.responseToken)
+        }
         sessions[key]?.state = .idle
-        sessions[key]?.reason = nil
-        sessions[key]?.permission = nil
-        sessions[key]?.isAwaitingPermissionResolution = false
+        if session.pendingRequests.isEmpty, session.permission == nil {
+            sessions[key]?.reason = nil
+            sessions[key]?.isAwaitingPermissionResolution = false
+        }
         let current = primarySession
         return ActivityChange(state: current?.state ?? .idle, primarySession: current, shouldNotify: false)
     }
@@ -357,6 +383,14 @@ public struct ActivityReducer: Sendable {
 
     private static func requestKey(event: AgentEvent, request: AgentRequestUpdate) -> RequestEventKey {
         RequestEventKey(source: event.source, sessionID: event.sessionID, kind: request.kind, requestID: request.id)
+    }
+
+    private static func requestKey(
+        source: AgentSource,
+        sessionID: String,
+        request: AgentPendingRequest
+    ) -> RequestEventKey {
+        RequestEventKey(source: source, sessionID: sessionID, kind: request.kind, requestID: request.id)
     }
 
     private static func priority(_ state: RobotState) -> Int {
@@ -435,7 +469,18 @@ public struct ActivityReducer: Sendable {
     private mutating func removeTree(rootedAt rootKey: String, clearedAt: Date? = nil) {
         let keysToRemove = treeKeys(rootedAt: rootKey)
         for key in keysToRemove {
-            sessions.removeValue(forKey: key)
+            if let session = sessions.removeValue(forKey: key) {
+                for request in session.pendingRequests {
+                    acknowledgedRequests.remove(Self.requestKey(
+                        source: session.source,
+                        sessionID: session.sessionID,
+                        request: request
+                    ))
+                }
+                if let token = session.permission?.responseToken {
+                    acknowledgedLegacyPermissions.remove(token)
+                }
+            }
             if let clearedAt {
                 latestEventAt[key] = max(latestEventAt[key] ?? .distantPast, clearedAt)
                 latestClearedAt[key] = max(latestClearedAt[key] ?? .distantPast, clearedAt)
@@ -452,7 +497,14 @@ public struct ActivityReducer: Sendable {
         guard var session = sessions[key] else { return }
         if let request = session.pendingRequests.first {
             let presentedRequest = session.pendingRequests.first(where: { $0.permission != nil }) ?? request
-            session.state = .attention
+            let hasUnacknowledgedRequests = session.pendingRequests.contains {
+                !acknowledgedRequests.contains(Self.requestKey(
+                    source: session.source,
+                    sessionID: session.sessionID,
+                    request: $0
+                ))
+            }
+            session.state = hasUnacknowledgedRequests ? .attention : .idle
             session.reason = presentedRequest.reason
             session.permission = presentedRequest.permission
             session.isAwaitingPermissionResolution = true

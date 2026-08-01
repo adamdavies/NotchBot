@@ -150,9 +150,10 @@ private struct AgentQueueRow: View {
                     Text("·")
                     Text(projectName)
                 }
-                if session.state == .attention, let reason = session.reason {
+                if (session.state == .attention || session.isAwaitingPermissionResolution), let reason = session.reason {
                     Text("·")
-                    Text(session.permission == nil && reason.localizedCaseInsensitiveContains("permission")
+                    Text(session.state == .attention && session.permission == nil
+                         && reason.localizedCaseInsensitiveContains("permission")
                          ? "Needs your attention" : reason)
                 }
                 if session.pendingRequestCount > 1 {
@@ -235,7 +236,7 @@ private struct AgentQueueRow: View {
     }
 
     private var statusColor: Color {
-        switch session.state {
+        return switch session.state {
         case .attention: Color(red: 0.82, green: 0.65, blue: 0.28)
         case .working: Color(red: 0.28, green: 0.52, blue: 0.82)
         case .idle: Color(red: 0.32, green: 0.68, blue: 0.48)
@@ -243,7 +244,10 @@ private struct AgentQueueRow: View {
     }
 
     private var statusText: String {
-        switch session.state {
+        if session.state == .idle, session.isAwaitingPermissionResolution {
+            return "Attending"
+        }
+        return switch session.state {
         case .attention: "Needs you"
         case .working: "Working"
         case .idle: "Idle"

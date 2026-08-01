@@ -335,6 +335,89 @@ import Testing
     #expect(reducer.primarySession?.permission == nil)
 }
 
+@Test func acknowledgingPendingQuestionRetainsRequestWithoutAttention() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start,
+        reason: "OpenCode has a question",
+        request: AgentRequestUpdate(id: "question-one", kind: .question, state: .opened)
+    ))
+
+    let acknowledged = reducer.acknowledgeAttention(source: .opencode, sessionID: "session")
+
+    #expect(acknowledged.state == .idle)
+    #expect(reducer.primarySession?.state == .idle)
+    #expect(reducer.primarySession?.reason == "OpenCode has a question")
+    #expect(reducer.primarySession?.pendingRequestCount == 1)
+    #expect(reducer.primarySession?.isAwaitingPermissionResolution == true)
+
+    let duplicate = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "OpenCode has a question",
+        request: AgentRequestUpdate(id: "question-one", kind: .question, state: .opened)
+    ))
+
+    #expect(duplicate.state == .idle)
+    #expect(!duplicate.shouldNotify)
+    #expect(reducer.primarySession?.pendingRequestCount == 1)
+}
+
+@Test func newRequestRestoresAttentionAfterCurrentRequestsAreAcknowledged() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start,
+        reason: "First question",
+        request: AgentRequestUpdate(id: "question-one", kind: .question, state: .opened)
+    ))
+    reducer.acknowledgeAttention(source: .opencode, sessionID: "session")
+
+    let second = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        reason: "Second question",
+        request: AgentRequestUpdate(id: "question-two", kind: .question, state: .opened)
+    ))
+
+    #expect(second.state == .attention)
+    #expect(second.shouldNotify)
+    #expect(reducer.primarySession?.pendingRequestCount == 2)
+}
+
+@Test func acknowledgingLegacyPermissionRetainsItsActionsWithoutAttention() {
+    let token = String(repeating: "1", count: 32)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .attention,
+        sessionID: "session",
+        reason: "Claude Code needs permission",
+        permission: AgentPermissionRequest(
+            responseToken: token,
+            summary: "Bash",
+            canAlwaysAllow: true
+        )
+    ))
+
+    reducer.acknowledgeAttention(source: .claude, sessionID: "session")
+
+    #expect(reducer.primarySession?.state == .idle)
+    #expect(reducer.primarySession?.permission?.responseToken == token)
+    #expect(reducer.primarySession?.isAwaitingPermissionResolution == true)
+}
+
 @Test func delayedRequestEventIsIndependentFromNewerWorkingTimestamp() {
     let start = Date(timeIntervalSince1970: 100)
     var reducer = ActivityReducer()

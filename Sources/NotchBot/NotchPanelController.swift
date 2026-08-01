@@ -259,6 +259,7 @@ private final class DisplayPanelController {
         let pad = Self.shadowPadding
         let screenFrame = geometry.screenFrame
         let cardTop = screenFrame.maxY - geometry.coverageHeight - 4
+        let summaryTop = min(cardTop, panel.frame.minY)
         let notchCenterX = geometry.originX + geometry.width / 2
         let cardX = min(
             max(screenFrame.minX + 8, notchCenterX - size.width / 2),
@@ -266,9 +267,9 @@ private final class DisplayPanelController {
         )
         summaryFrame = NSRect(
             x: cardX - pad,
-            y: cardTop - size.height - pad,
+            y: summaryTop - size.height - pad,
             width: size.width + pad * 2,
-            height: size.height + pad * 2
+            height: size.height + pad
         )
         if summaryPanel.isVisible {
             summaryPanel.contentView?.layer?.removeAllAnimations()
