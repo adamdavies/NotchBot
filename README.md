@@ -6,19 +6,19 @@
 
 NotchBot is a native macOS menu-bar companion for AI coding agents. It extends a MacBook notch with a pixel robot that sleeps with drifting Zs while idle, walks while an agent is working, and jumps with a yellow pulse when an agent needs attention.
 
-Version 0.3.2 supports OpenCode and Claude Code on Apple Silicon Macs running macOS 14 or later.
+Version 0.4.0 supports OpenCode and Claude Code on Apple Silicon Macs running macOS 14 or later.
 
 ## Install
 
-Download `NotchBot-0.3.2.dmg` and `NotchBot-0.3.2.dmg.sha256` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), verify the checksum, open the DMG, and move NotchBot into `/Applications`.
+Download `NotchBot-0.4.0.dmg` and `NotchBot-0.4.0.dmg.sha256` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), verify the checksum, open the DMG, and move NotchBot into `/Applications`.
 
 ```sh
-shasum -a 256 -c NotchBot-0.3.2.dmg.sha256
+shasum -a 256 -c NotchBot-0.4.0.dmg.sha256
 ```
 
 Developer ID signing and notarization are preferred. When those credentials are unavailable, an explicitly produced ad-hoc release may require right-clicking NotchBot and selecting **Open**; the release notes identify that status.
 
-Open the fixed robot menu-bar icon and select **Install Integrations** for a first installation. After updating NotchBot, including to v0.3.2, select **Update Integrations** and restart all running OpenCode and Claude Code sessions so they load the current integration.
+Open the fixed robot menu-bar icon and select **Install Integrations** for a first installation. After updating NotchBot, including to v0.4.0, select **Update Integrations** and restart all running OpenCode and Claude Code sessions so they load the current integration.
 
 ## Current Features
 
@@ -165,21 +165,23 @@ NOTARIZE=1 NOTARY_PROFILE="notchbot-notary" scripts/create-dmg.sh
 
 ## Integration Files
 
-NotchBot's v0.3.2 integration and local transport use these paths:
+NotchBot's v0.4.0 integration and local transport use these paths:
 
 - `~/Library/Application Support/NotchBot/bin/notchbot-hook`
 - `~/Library/Application Support/NotchBot/bin/notchbot-hook.notchbot-owner`
 - `~/Library/Application Support/NotchBot/bin/notchbot-statusline` (only while cost tracking is enabled)
 - `~/Library/Application Support/NotchBot/statusline-state.json` (only while cost tracking is enabled)
 - `~/Library/Application Support/NotchBot/integration-installation.json`
-- `~/Library/Application Support/NotchBot/integration-backups/claude-settings-<UUID>.backup` (transactional, normally removed after verification)
+- `~/Library/Application Support/NotchBot/integration-backups/claude-settings-<UUID>.backup` (transactional, mode `0600`, normally removed after verification, at most five retained after failures)
 - `~/Library/Application Support/NotchBot/event.key`
 - `~/Library/Application Support/NotchBot/instance.lock`
 - `~/Library/Application Support/NotchBot/notchbot.sock`
 - `~/.config/opencode/plugins/notchbot.js`
 - `~/.claude/settings.json` (NotchBot handlers are merged into `hooks`; opt-in cost tracking also wraps `statusLine`)
 
-Before changing Claude Code settings, NotchBot creates a restrictive transactional backup under `~/Library/Application Support/NotchBot/integration-backups/`. It removes the backup after verifying a successful update and leaves it for recovery if the update fails. When cost tracking is enabled, NotchBot stores the complete prior status-line configuration, preserves its options and output, and restores it when tracking is disabled. Removal verifies generated markers and managed configuration before deleting files. These checks reduce accidental replacement but cannot protect against a malicious process running as the same user. A legacy `~/.claude/settings.json.notchbot-backup` created by v0.1.0 is left untouched and can be reviewed or removed manually after migration.
+Before changing Claude Code settings, NotchBot creates a mode-`0600` transactional backup under `~/Library/Application Support/NotchBot/integration-backups/`. Managed files are staged in the destination directory with restrictive permissions applied before atomic rename. NotchBot removes a backup after verifying a successful update and retains at most the five newest recognized backups after failures; unrelated files, directories, and symlinks are not pruned. Backups support manual recovery and are not restored automatically. When cost tracking is enabled, NotchBot stores the complete prior status-line configuration, preserves its options and output, and restores it when tracking is disabled. Removal verifies generated markers and managed configuration before deleting files. These checks reduce accidental replacement but cannot protect against a malicious process running as the same user. A legacy `~/.claude/settings.json.notchbot-backup` created by v0.1.0 is left untouched and can be reviewed or removed manually after migration.
+
+Integration revision 17 requires selecting **Update Integrations** after installing the updated app, then restarting all running Claude Code and OpenCode sessions.
 
 ## Privacy
 
@@ -191,7 +193,7 @@ Claude Code supplies its hook JSON, and while cost tracking is enabled its docum
 
 The socket is readable and writable only by the current macOS user. This protects against other local user accounts, not other processes running as the same user: a same-user process can inspect integration files or forge local events. See [SECURITY.md](SECURITY.md) for the full threat model.
 
-NotchBot 0.3.2 is not App Sandbox enabled and requests no signing entitlements.
+NotchBot 0.4.0 is not App Sandbox enabled and requests no signing entitlements.
 
 ## License
 

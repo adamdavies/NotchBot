@@ -8,6 +8,29 @@ extension Notification.Name {
     static let notchBotCostTrackingDisabled = Notification.Name("NotchBotCostTrackingDisabled")
 }
 
+struct ActivityModelNotificationDependencies {
+    var send: @MainActor (_ identifier: String, _ title: String, _ body: String) -> Void
+    var resolve: @MainActor (_ identifier: String) -> Void
+
+    static let live = Self(
+        send: { identifier, title, body in
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            UNUserNotificationCenter.current().add(UNNotificationRequest(
+                identifier: identifier,
+                content: content,
+                trigger: nil
+            ))
+        },
+        resolve: { identifier in
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+        }
+    )
+}
+
 @MainActor
 final class ActivityModel: ObservableObject {
     @Published private(set) var robotState: RobotState = .idle
@@ -29,6 +52,9 @@ final class ActivityModel: ObservableObject {
     private var maintenanceTask: Task<Void, Never>?
     private let defaults: UserDefaults
     private let calendar: Calendar
+    private let nowProvider: @MainActor () -> Date
+    private let sleep: @Sendable (UInt64) async throws -> Void
+    private let notifications: ActivityModelNotificationDependencies
     private var coolnessDay: String
     private var dailyResetTask: Task<Void, Never>?
     private var calendarObservers: [NSObjectProtocol] = []
@@ -37,26 +63,36 @@ final class ActivityModel: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         calendar: Calendar = .autoupdatingCurrent,
-        now: Date = Date()
+        now: Date? = nil,
+        nowProvider: @escaping @MainActor () -> Date = Date.init,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+        notifications: ActivityModelNotificationDependencies = .live,
+        enableBackgroundMaintenance: Bool = true
     ) {
+        let initialNow = now ?? nowProvider()
         self.defaults = defaults
         self.calendar = calendar
-        coolnessDay = DailyCoolnessPreference.dayIdentifier(for: now, calendar: calendar)
-        let savedCount = DailyCoolnessPreference.load(from: defaults, now: now, calendar: calendar)
+        self.nowProvider = nowProvider
+        self.sleep = sleep
+        self.notifications = notifications
+        coolnessDay = DailyCoolnessPreference.dayIdentifier(for: initialNow, calendar: calendar)
+        let savedCount = DailyCoolnessPreference.load(from: defaults, now: initialNow, calendar: calendar)
         dailyCompletionCount = savedCount
         coolnessTracker = DailyCoolnessTracker(completionCount: savedCount)
-        let savedCost = DailyCostPreference.load(from: defaults, now: now, calendar: calendar)
+        let savedCost = DailyCostPreference.load(from: defaults, now: initialNow, calendar: calendar)
         dailyCostTotal = savedCost.totalCost
         costTracker = DailyCostTracker(totalCost: savedCost.totalCost, sessionCosts: savedCost.sessionCosts)
-        maintenanceTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
-                guard !Task.isCancelled else { return }
-                self?.performMaintenance()
+        if enableBackgroundMaintenance {
+            maintenanceTask = Task { [weak self, sleep] in
+                while !Task.isCancelled {
+                    try? await sleep(60_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    self?.performMaintenance()
+                }
             }
+            scheduleDailyReset(now: initialNow)
+            installDailyResetObservers()
         }
-        scheduleDailyReset(now: now)
-        installDailyResetObservers()
     }
 
     var displayedRobotState: RobotState {
@@ -112,11 +148,11 @@ final class ActivityModel: ObservableObject {
     }
 
     func receive(_ event: AgentEvent) {
-        refreshDailyCoolness()
-        guard (try? AgentEventValidator.validate(event)) != nil else { return }
+        let now = nowProvider()
+        refreshDailyCoolness(now: now)
+        guard (try? AgentEventValidator.validate(event, now: now)) != nil else { return }
         if event.kind == .requestResolved, let identifier = notificationIdentifier(for: event) {
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
-            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+            notifications.resolve(identifier)
         }
         if let rejection = reducer.rejectDescendantOfClearedSession(event) {
             publish(rejection)
@@ -136,7 +172,7 @@ final class ActivityModel: ObservableObject {
             DailyCoolnessPreference.save(
                 completionCount: dailyCompletionCount,
                 to: defaults,
-                now: Date(),
+                now: now,
                 calendar: calendar
             )
         }
@@ -146,7 +182,7 @@ final class ActivityModel: ObservableObject {
                 totalCost: costTracker.totalCost,
                 sessionCosts: costTracker.sessionCosts,
                 to: defaults,
-                now: Date(),
+                now: now,
                 calendar: calendar
             )
         }
@@ -204,13 +240,14 @@ final class ActivityModel: ObservableObject {
         receive(AgentEvent(
             source: session.source,
             kind: .cleared,
-            sessionID: session.sessionID
+            sessionID: session.sessionID,
+            timestamp: nowProvider()
         ))
     }
 
     func clearAllSessions() {
         let sessions = activeSessions
-        let timestamp = Date()
+        let timestamp = nowProvider()
         for session in sessions {
             receive(AgentEvent(
                 source: session.source,
@@ -272,16 +309,11 @@ final class ActivityModel: ObservableObject {
     }
 
     private func sendNotification(for event: AgentEvent) {
-        let content = UNMutableNotificationContent()
-        content.title = event.source == .claude ? "Claude Code" : "OpenCode"
-        content.body = event.reason ?? "Your agent is waiting for you."
-        content.sound = .default
-        let request = UNNotificationRequest(
-            identifier: notificationIdentifier(for: event) ?? UUID().uuidString,
-            content: content,
-            trigger: nil
+        notifications.send(
+            notificationIdentifier(for: event) ?? UUID().uuidString,
+            event.source == .claude ? "Claude Code" : "OpenCode",
+            event.reason ?? "Your agent is waiting for you."
         )
-        UNUserNotificationCenter.current().add(request)
     }
 
     private func notificationIdentifier(for event: AgentEvent) -> String? {
@@ -298,12 +330,13 @@ final class ActivityModel: ObservableObject {
             expiryTasks.removeValue(forKey: oldestKey)?.cancel()
         }
         let nanoseconds = UInt64(duration * 1_000_000_000)
-        expiryTasks[sessionKey] = Task { [weak self] in
+        expiryTasks[sessionKey] = Task { [weak self, sleep] in
             do {
-                try await Task.sleep(nanoseconds: nanoseconds)
+                try await sleep(nanoseconds)
             } catch {
                 return
             }
+            guard !Task.isCancelled else { return }
             guard let self else { return }
             let change = reducer.expireAttention(
                 source: event.source,
@@ -322,7 +355,8 @@ final class ActivityModel: ObservableObject {
         publish(change)
     }
 
-    private func performMaintenance(now: Date = Date()) {
+    private func performMaintenance(now: Date? = nil) {
+        let now = now ?? nowProvider()
         refreshDailyCoolness(now: now)
         reducer.removeSessions(olderThan: now.addingTimeInterval(-30 * 60))
         cancelOrphanedExpiryTasks()
@@ -361,14 +395,15 @@ final class ActivityModel: ObservableObject {
         let startOfToday = calendar.startOfDay(for: now)
         guard let startOfTomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) else { return }
         let nanoseconds = UInt64(max(1, startOfTomorrow.timeIntervalSince(now)) * 1_000_000_000)
-        dailyResetTask = Task { [weak self] in
+        dailyResetTask = Task { [weak self, sleep] in
             do {
-                try await Task.sleep(nanoseconds: nanoseconds)
+                try await sleep(nanoseconds)
             } catch {
                 return
             }
+            guard !Task.isCancelled else { return }
             guard let self else { return }
-            let resetAt = Date()
+            let resetAt = nowProvider()
             refreshDailyCoolness(now: resetAt)
             scheduleDailyReset(now: resetAt)
         }
@@ -384,7 +419,7 @@ final class ActivityModel: ObservableObject {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
                     guard let self else { return }
-                    let now = Date()
+                    let now = self.nowProvider()
                     self.refreshDailyCoolness(now: now)
                     self.scheduleDailyReset(now: now)
                 }
@@ -407,7 +442,7 @@ final class ActivityModel: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                let now = Date()
+                let now = self.nowProvider()
                 self.refreshDailyCoolness(now: now)
                 self.scheduleDailyReset(now: now)
             }

@@ -6,6 +6,40 @@ import ServiceManagement
 
 @MainActor
 final class IntegrationInstaller: ObservableObject {
+    struct Environment {
+        var fileManager: FileManager
+        var homeDirectory: URL
+        var applicationSupportDirectory: URL
+        var defaults: UserDefaults
+        var bundledHookExecutable: URL?
+        var makeUUID: () -> UUID
+        var fileWriter: any AtomicFileWriting
+
+        static var live: Environment {
+            let fileManager = FileManager.default
+            let packagedHelper = Bundle.main.bundleURL
+                .appendingPathComponent("Contents/Helpers", isDirectory: true)
+                .appendingPathComponent("notchbot-hook")
+            let developmentHelper = Bundle.main.executableURL?
+                .deletingLastPathComponent()
+                .appendingPathComponent("notchbot-hook")
+            let bundledHelper = Bundle.main.url(forAuxiliaryExecutable: "notchbot-hook")
+                ?? (fileManager.isExecutableFile(atPath: packagedHelper.path) ? packagedHelper : nil)
+                ?? developmentHelper.flatMap {
+                    fileManager.isExecutableFile(atPath: $0.path) ? $0 : nil
+                }
+            return Environment(
+                fileManager: fileManager,
+                homeDirectory: fileManager.homeDirectoryForCurrentUser,
+                applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory,
+                defaults: .standard,
+                bundledHookExecutable: bundledHelper,
+                makeUUID: UUID.init,
+                fileWriter: SecureAtomicFileWriter()
+            )
+        }
+    }
+
     @Published private(set) var message = "Integrations not installed"
     @Published private(set) var launchesAtLogin = SMAppService.mainApp.status == .enabled
     @Published private(set) var requiresUpdate = false
@@ -13,10 +47,12 @@ final class IntegrationInstaller: ObservableObject {
 
     private static let costTrackingKey = "costTrackingEnabled"
 
-    private let fileManager = FileManager.default
+    private let environment: Environment
+    private var fileManager: FileManager { environment.fileManager }
 
-    init() {
-        costTrackingEnabled = UserDefaults.standard.bool(forKey: Self.costTrackingKey)
+    init(environment: Environment = .live) {
+        self.environment = environment
+        costTrackingEnabled = environment.defaults.bool(forKey: Self.costTrackingKey)
         refreshStatus()
     }
 
@@ -44,10 +80,10 @@ final class IntegrationInstaller: ObservableObject {
             if pluginExists && !pluginIsOwned && !pluginIsLegacy {
                 throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
             }
-            let helperExists = itemExists(at: NotchBotPaths.installedHookURL)
+            let helperExists = itemExists(at: installedHookURL)
             let helperIsOwned = helperExists ? try isOwnedHelper() : false
             if helperExists && !helperIsOwned && !pluginIsLegacy && !claudeIsLegacy {
-                throw IntegrationError.unrelatedManagedFile(NotchBotPaths.installedHookURL.path)
+                throw IntegrationError.unrelatedManagedFile(installedHookURL.path)
             }
             if itemExists(at: helperOwnershipURL), !(try isOwnedHelperMarker()) {
                 throw IntegrationError.unrelatedManagedFile(helperOwnershipURL.path)
@@ -58,8 +94,8 @@ final class IntegrationInstaller: ObservableObject {
 
             try updateClaudeSettings(install: false)
             if pluginExists { try fileManager.removeItem(at: openCodePluginURL) }
-            if itemExists(at: NotchBotPaths.installedHookURL) {
-                try fileManager.removeItem(at: NotchBotPaths.installedHookURL)
+            if itemExists(at: installedHookURL) {
+                try fileManager.removeItem(at: installedHookURL)
             }
             if itemExists(at: helperOwnershipURL) {
                 try fileManager.removeItem(at: helperOwnershipURL)
@@ -92,18 +128,18 @@ final class IntegrationInstaller: ObservableObject {
 
     func enableCostTracking() {
         do {
-            guard itemExists(at: NotchBotPaths.installedHookURL), itemExists(at: openCodePluginURL) else {
+            guard itemExists(at: installedHookURL), itemExists(at: openCodePluginURL) else {
                 message = "Install integrations first"
                 return
             }
             try enableCostTrackingFiles()
-            UserDefaults.standard.set(true, forKey: Self.costTrackingKey)
+            environment.defaults.set(true, forKey: Self.costTrackingKey)
             costTrackingEnabled = true
             message = "Cost tracking enabled"
         } catch {
             if (try? isOwnedPlugin(at: openCodePluginURL)) == true {
                 try? writeOpenCodePlugin(
-                    hookURL: NotchBotPaths.installedHookURL,
+                    hookURL: installedHookURL,
                     includeCostTracking: false
                 )
             }
@@ -124,13 +160,13 @@ final class IntegrationInstaller: ObservableObject {
     }
 
     private var statusLineWrapperURL: URL {
-        NotchBotPaths.applicationSupportDirectory
+        environment.applicationSupportDirectory
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("notchbot-statusline")
     }
 
     private var statusLineStateURL: URL {
-        NotchBotPaths.applicationSupportDirectory.appendingPathComponent("statusline-state.json")
+        environment.applicationSupportDirectory.appendingPathComponent("statusline-state.json")
     }
 
     private func enableCostTrackingFiles() throws {
@@ -168,11 +204,11 @@ final class IntegrationInstaller: ObservableObject {
                 try writeAtomically(try JSONEncoder().encode(state), to: statusLineStateURL, permissions: 0o600)
             }
             let script = StatusLineWrapper.generate(
-                hookPath: NotchBotPaths.installedHookURL.path,
+                hookPath: installedHookURL.path,
                 existingCommand: originalCommand
             )
             try writeAtomically(Data(script.utf8), to: statusLineWrapperURL, permissions: 0o700)
-            try writeOpenCodePlugin(hookURL: NotchBotPaths.installedHookURL, includeCostTracking: true)
+            try writeOpenCodePlugin(hookURL: installedHookURL, includeCostTracking: true)
             return
         }
 
@@ -226,7 +262,7 @@ final class IntegrationInstaller: ObservableObject {
 
         let originalCommand = command(fromStatusLineJSON: originalStatusLineJSON)
         let script = StatusLineWrapper.generate(
-            hookPath: NotchBotPaths.installedHookURL.path,
+            hookPath: installedHookURL.path,
             existingCommand: originalCommand
         )
         let state = StatusLineWrapperState(originalStatusLineJSON: originalStatusLineJSON)
@@ -239,7 +275,7 @@ final class IntegrationInstaller: ObservableObject {
         replacementStatusLine["type"] = "command"
         replacementStatusLine["command"] = StatusLineWrapper.command(wrapperPath: statusLineWrapperURL.path)
         settings["statusLine"] = replacementStatusLine
-        try writeOpenCodePlugin(hookURL: NotchBotPaths.installedHookURL, includeCostTracking: true)
+        try writeOpenCodePlugin(hookURL: installedHookURL, includeCostTracking: true)
         try replaceClaudeSettings(originalData: originalData, originalMode: originalMode, with: settings)
     }
 
@@ -275,7 +311,7 @@ final class IntegrationInstaller: ObservableObject {
             guard try isOwnedPlugin(at: openCodePluginURL) else {
                 throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
             }
-            try writeOpenCodePlugin(hookURL: NotchBotPaths.installedHookURL, includeCostTracking: false)
+            try writeOpenCodePlugin(hookURL: installedHookURL, includeCostTracking: false)
         }
         if wrapperIsOwned { try? fileManager.removeItem(at: statusLineWrapperURL) }
         if state != nil { try? fileManager.removeItem(at: statusLineStateURL) }
@@ -326,8 +362,8 @@ final class IntegrationInstaller: ObservableObject {
     }
 
     private func clearCostTrackingPreferences() {
-        UserDefaults.standard.set(false, forKey: Self.costTrackingKey)
-        DailyCostPreference.clear(from: .standard)
+        environment.defaults.set(false, forKey: Self.costTrackingKey)
+        DailyCostPreference.clear(from: environment.defaults)
         NotificationCenter.default.post(name: .notchBotCostTrackingDisabled, object: nil)
     }
 
@@ -371,7 +407,7 @@ final class IntegrationInstaller: ObservableObject {
             (try? isCurrentOwnedHelper()) == true,
             (try? isOwnedPlugin(at: openCodePluginURL)) == true
         else {
-            if itemExists(at: NotchBotPaths.installedHookURL) || itemExists(at: openCodePluginURL) {
+            if itemExists(at: installedHookURL) || itemExists(at: openCodePluginURL) {
                 message = "Integration update required"
                 requiresUpdate = true
             }
@@ -382,17 +418,14 @@ final class IntegrationInstaller: ObservableObject {
     }
 
     private func installHookExecutable(allowLegacyUpdate: Bool) throws -> URL {
-        let destination = NotchBotPaths.installedHookURL
+        let destination = installedHookURL
         try preparePrivateSupportDirectory()
         try fileManager.createDirectory(
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: destination.deletingLastPathComponent().path
-        )
+        try secureDirectory(destination.deletingLastPathComponent(), permissions: 0o700)
         if itemExists(at: destination) {
             guard (try isOwnedHelper()) || allowLegacyUpdate else {
                 throw IntegrationError.unrelatedManagedFile(destination.path)
@@ -401,7 +434,7 @@ final class IntegrationInstaller: ObservableObject {
         if itemExists(at: helperOwnershipURL), !(try regularFile(at: helperOwnershipURL)) {
             throw IntegrationError.unrelatedManagedFile(helperOwnershipURL.path)
         }
-        guard let source = bundledHookExecutable else {
+        guard let source = environment.bundledHookExecutable else {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: "notchbot-hook"])
         }
 
@@ -414,19 +447,14 @@ final class IntegrationInstaller: ObservableObject {
         return destination
     }
 
-    private var bundledHookExecutable: URL? {
-        if let helper = Bundle.main.url(forAuxiliaryExecutable: "notchbot-hook") { return helper }
-        let packagedHelper = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Helpers", isDirectory: true)
+    private var installedHookURL: URL {
+        environment.applicationSupportDirectory
+            .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("notchbot-hook")
-        if fileManager.isExecutableFile(atPath: packagedHelper.path) { return packagedHelper }
-        guard let executable = Bundle.main.executableURL else { return nil }
-        let developmentHelper = executable.deletingLastPathComponent().appendingPathComponent("notchbot-hook")
-        return fileManager.isExecutableFile(atPath: developmentHelper.path) ? developmentHelper : nil
     }
 
     private var openCodePluginURL: URL {
-        fileManager.homeDirectoryForCurrentUser
+        environment.homeDirectory
             .appendingPathComponent(".config/opencode/plugins", isDirectory: true)
             .appendingPathComponent("notchbot.js")
     }
@@ -455,7 +483,7 @@ final class IntegrationInstaller: ObservableObject {
     }
 
     private var claudeSettingsURL: URL {
-        fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json")
+        environment.homeDirectory.appendingPathComponent(".claude/settings.json")
     }
 
     private func updateClaudeSettings(install: Bool) throws {
@@ -472,8 +500,8 @@ final class IntegrationInstaller: ObservableObject {
         let originalMode = try fileMode(at: settingsURL) ?? 0o600
         let originalSettings = try decodeJSONObject(originalData)
         let updatedSettings = install
-            ? ClaudeHooks.merging(into: originalSettings, hookPath: NotchBotPaths.installedHookURL.path)
-            : ClaudeHooks.removing(from: originalSettings, hookPath: NotchBotPaths.installedHookURL.path)
+            ? ClaudeHooks.merging(into: originalSettings, hookPath: installedHookURL.path)
+            : ClaudeHooks.removing(from: originalSettings, hookPath: installedHookURL.path)
         try replaceClaudeSettings(originalData: originalData, originalMode: originalMode, with: updatedSettings)
     }
 
@@ -490,11 +518,18 @@ final class IntegrationInstaller: ObservableObject {
 
         let backupURL = try createSettingsBackup(data: originalData)
         do {
-            let currentData = itemExists(at: settingsURL)
-                ? try boundedData(at: settingsURL, maximum: 4 * 1_024 * 1_024)
-                : Data()
-            guard currentData == originalData else { throw IntegrationError.concurrentSettingsChange }
-            try writeAtomically(updatedData, to: settingsURL, permissions: originalMode)
+            let currentSnapshot = itemExists(at: settingsURL)
+                ? try boundedSnapshot(at: settingsURL, maximum: 4 * 1_024 * 1_024)
+                : nil
+            guard currentSnapshot?.data ?? Data() == originalData else {
+                throw IntegrationError.concurrentSettingsChange
+            }
+            try writeAtomically(
+                updatedData,
+                to: settingsURL,
+                permissions: originalMode,
+                expectation: currentSnapshot.map { .identity($0.identity) } ?? .absent
+            )
             let verification = try decodeJSONObject(
                 boundedData(at: settingsURL, maximum: 4 * 1_024 * 1_024)
             )
@@ -511,27 +546,27 @@ final class IntegrationInstaller: ObservableObject {
 
     private func createSettingsBackup(data: Data) throws -> URL {
         let directory = NotchBotIntegrationFiles.backupDirectoryURL(
-            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+            applicationSupportDirectory: environment.applicationSupportDirectory
         )
         try fileManager.createDirectory(
             at: directory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        let url = directory.appendingPathComponent("claude-settings-\(UUID().uuidString).backup")
+        try secureDirectory(directory, permissions: 0o700)
+        let url = directory.appendingPathComponent("claude-settings-\(environment.makeUUID().uuidString).backup")
         try writeAtomically(data, to: url, permissions: 0o600)
+        try pruneSettingsBackups(preserving: url)
         return url
     }
 
     private func removeOwnedBackups() throws {
         let directory = NotchBotIntegrationFiles.backupDirectoryURL(
-            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+            applicationSupportDirectory: environment.applicationSupportDirectory
         )
-        guard itemExists(at: directory) else { return }
+        guard try privateDirectory(at: directory) else { return }
         let entries = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        for entry in entries where entry.lastPathComponent.hasPrefix("claude-settings-")
-            && entry.pathExtension == "backup" {
+        for entry in entries where isSettingsBackup(entry) {
             guard try regularFile(at: entry) else { continue }
             try fileManager.removeItem(at: entry)
         }
@@ -540,18 +575,56 @@ final class IntegrationInstaller: ObservableObject {
         }
     }
 
+    private func pruneSettingsBackups(preserving current: URL) throws {
+        let directory = current.deletingLastPathComponent()
+        let entries = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        )
+        let backups = try entries.filter {
+            guard isSettingsBackup($0) else { return false }
+            return try regularFile(at: $0)
+        }
+        let newest = try backups.sorted {
+            let left = try $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast
+            let right = try $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast
+            if left == right { return $0.lastPathComponent > $1.lastPathComponent }
+            return left > right
+        }
+        let currentPath = current.standardizedFileURL.path
+        let retainedPaths = Set(
+            [currentPath] + newest.lazy
+                .map { $0.standardizedFileURL.path }
+                .filter { $0 != currentPath }
+                .prefix(4)
+        )
+        for backup in backups where !retainedPaths.contains(backup.standardizedFileURL.path) {
+            try fileManager.removeItem(at: backup)
+        }
+    }
+
+    private func isSettingsBackup(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        let prefix = "claude-settings-"
+        let suffix = ".backup"
+        guard name.hasPrefix(prefix), name.hasSuffix(suffix) else { return false }
+        let token = String(name.dropFirst(prefix.count).dropLast(suffix.count))
+        guard let uuid = UUID(uuidString: token) else { return false }
+        return uuid.uuidString == token
+    }
+
     private var legacyPrivacyPolicyURL: URL {
-        NotchBotPaths.applicationSupportDirectory.appendingPathComponent("integration-privacy.json")
+        environment.applicationSupportDirectory.appendingPathComponent("integration-privacy.json")
     }
 
     private var installStatusURL: URL {
         NotchBotIntegrationFiles.installStatusURL(
-            applicationSupportDirectory: NotchBotPaths.applicationSupportDirectory
+            applicationSupportDirectory: environment.applicationSupportDirectory
         )
     }
 
     private var helperOwnershipURL: URL {
-        NotchBotIntegrationFiles.helperOwnershipURL(helperURL: NotchBotPaths.installedHookURL)
+        NotchBotIntegrationFiles.helperOwnershipURL(helperURL: installedHookURL)
     }
 
     private func removeLegacyPrivacyPolicyIfOwned() throws {
@@ -617,7 +690,7 @@ final class IntegrationInstaller: ObservableObject {
         let data = try boundedData(at: claudeSettingsURL, maximum: 4 * 1_024 * 1_024)
         return ClaudeHooks.containsManagedHandlers(
             in: try decodeJSONObject(data),
-            hookPath: NotchBotPaths.installedHookURL.path
+            hookPath: installedHookURL.path
         )
     }
 
@@ -631,9 +704,9 @@ final class IntegrationInstaller: ObservableObject {
                 throw IntegrationError.unrelatedManagedFile(openCodePluginURL.path)
             }
         }
-        if itemExists(at: NotchBotPaths.installedHookURL) {
+        if itemExists(at: installedHookURL) {
             guard (try isOwnedHelper()) || allowHelperUpdate else {
-                throw IntegrationError.unrelatedManagedFile(NotchBotPaths.installedHookURL.path)
+                throw IntegrationError.unrelatedManagedFile(installedHookURL.path)
             }
         }
         if itemExists(at: helperOwnershipURL), !(try isOwnedHelperMarker()) {
@@ -661,15 +734,15 @@ final class IntegrationInstaller: ObservableObject {
 
     private func isOwnedHelper() throws -> Bool {
         guard
-            itemExists(at: NotchBotPaths.installedHookURL),
-            try regularFile(at: NotchBotPaths.installedHookURL),
+            itemExists(at: installedHookURL),
+            try regularFile(at: installedHookURL),
             try isOwnedHelperMarker()
         else { return false }
         return true
     }
 
     private func isCurrentOwnedHelper() throws -> Bool {
-        guard itemExists(at: NotchBotPaths.installedHookURL), try regularFile(at: NotchBotPaths.installedHookURL),
+        guard itemExists(at: installedHookURL), try regularFile(at: installedHookURL),
               itemExists(at: helperOwnershipURL), try regularFile(at: helperOwnershipURL) else { return false }
         return try boundedString(at: helperOwnershipURL, maximum: 128)
             == NotchBotIntegrationFiles.helperOwnershipMarker
@@ -704,18 +777,33 @@ final class IntegrationInstaller: ObservableObject {
         return (2...IntegrationInstallStatus.currentVersion).contains(version)
     }
 
-    private func writeAtomically(_ data: Data, to url: URL, permissions: Int) throws {
+    private func writeAtomically(
+        _ data: Data,
+        to url: URL,
+        permissions: Int,
+        expectation: AtomicFileExpectation = .unconstrained
+    ) throws {
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if itemExists(at: url), !(try regularFile(at: url)) {
-            throw IntegrationError.unrelatedManagedFile(url.path)
-        }
-        try data.write(to: url, options: .atomic)
-        try fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+        try environment.fileWriter.write(
+            data,
+            to: url,
+            permissions: mode_t(permissions),
+            expectation: expectation
+        )
     }
 
     private func regularFile(at url: URL) throws -> Bool {
+        let parentDescriptor = open(
+            url.deletingLastPathComponent().path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard parentDescriptor >= 0 else {
+            if errno == ENOENT { return false }
+            throw CocoaError(.fileReadUnknown)
+        }
+        defer { close(parentDescriptor) }
         var info = stat()
-        guard lstat(url.path, &info) == 0 else {
+        guard fstatat(parentDescriptor, url.lastPathComponent, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
             if errno == ENOENT { return false }
             throw CocoaError(.fileReadUnknown)
         }
@@ -728,16 +816,83 @@ final class IntegrationInstaller: ObservableObject {
     }
 
     private func fileMode(at url: URL) throws -> Int? {
-        guard itemExists(at: url) else { return nil }
-        return (try fileManager.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue
+        let descriptor = try openRegularFile(at: url)
+        guard descriptor >= 0 else {
+            return nil
+        }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_uid == getuid() else {
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        return Int(info.st_mode & mode_t(0o7777))
     }
 
     private func boundedData(at url: URL, maximum: Int) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        let data = handle.readData(ofLength: maximum + 1)
+        try boundedSnapshot(at: url, maximum: maximum).data
+    }
+
+    private func boundedSnapshot(at url: URL, maximum: Int) throws -> ManagedFileSnapshot {
+        let descriptor = try openRegularFile(at: url)
+        guard descriptor >= 0 else { throw CocoaError(.fileNoSuchFile) }
+        defer { close(descriptor) }
+        var initialInfo = stat()
+        guard fstat(descriptor, &initialInfo) == 0,
+              (initialInfo.st_mode & S_IFMT) == S_IFREG,
+              initialInfo.st_uid == getuid() else {
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        var data = Data(count: maximum + 1)
+        let count = try data.withUnsafeMutableBytes { bytes -> Int in
+            var offset = 0
+            while offset < bytes.count {
+                let result = Darwin.read(
+                    descriptor,
+                    bytes.baseAddress?.advanced(by: offset),
+                    bytes.count - offset
+                )
+                if result < 0 {
+                    if errno == EINTR { continue }
+                    throw CocoaError(.fileReadUnknown)
+                }
+                if result == 0 { break }
+                offset += result
+            }
+            return offset
+        }
+        data.count = count
         guard data.count <= maximum else { throw IntegrationError.managedFileTooLarge(url.path) }
-        return data
+        var finalInfo = stat()
+        guard fstat(descriptor, &finalInfo) == 0,
+              AtomicFileIdentity(initialInfo) == AtomicFileIdentity(finalInfo) else {
+            throw IntegrationError.concurrentSettingsChange
+        }
+        return ManagedFileSnapshot(data: data, identity: AtomicFileIdentity(finalInfo))
+    }
+
+    private func openRegularFile(at url: URL) throws -> Int32 {
+        let parent = url.deletingLastPathComponent()
+        let directoryDescriptor = open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directoryDescriptor >= 0 else {
+            if errno == ENOENT { return -1 }
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        defer { close(directoryDescriptor) }
+        let descriptor = openat(directoryDescriptor, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return -1 }
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_uid == getuid() else {
+            close(descriptor)
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        return descriptor
     }
 
     private func boundedString(at url: URL, maximum: Int) throws -> String {
@@ -764,7 +919,7 @@ final class IntegrationInstaller: ObservableObject {
     }
 
     private func preparePrivateSupportDirectory() throws {
-        let directory = NotchBotPaths.applicationSupportDirectory
+        let directory = environment.applicationSupportDirectory
         if itemExists(at: directory) {
             var info = stat()
             guard lstat(directory.path, &info) == 0,
@@ -779,8 +934,42 @@ final class IntegrationInstaller: ObservableObject {
                 attributes: [.posixPermissions: 0o700]
             )
         }
-        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        try secureDirectory(directory, permissions: 0o700)
     }
+
+    private func secureDirectory(_ directory: URL, permissions: Int) throws {
+        let descriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw IntegrationError.unsafeSupportDirectory }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFDIR,
+              info.st_uid == getuid() else {
+            throw IntegrationError.unsafeSupportDirectory
+        }
+        guard fchmod(descriptor, mode_t(permissions)) == 0 else {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+    }
+
+    private func privateDirectory(at directory: URL) throws -> Bool {
+        let descriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            if errno == ENOENT || errno == ELOOP || errno == ENOTDIR { return false }
+            throw CocoaError(.fileReadUnknown)
+        }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else { throw CocoaError(.fileReadUnknown) }
+        return (info.st_mode & S_IFMT) == S_IFDIR
+            && info.st_uid == getuid()
+            && info.st_mode & (S_IWGRP | S_IWOTH) == 0
+    }
+}
+
+private struct ManagedFileSnapshot {
+    let data: Data
+    let identity: AtomicFileIdentity
 }
 
 private enum IntegrationError: LocalizedError {

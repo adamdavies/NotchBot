@@ -27,8 +27,11 @@ public enum EventKeyStore {
 
     // This rejects messages from processes without the key; it does not isolate NotchBot
     // from another malicious process already running as the same user and able to read it.
-    public static func loadOrCreateKey() throws -> SymmetricKey {
-        try secureSupportDirectory()
+    public static func loadOrCreateKey(
+        applicationSupportDirectory: URL = NotchBotPaths.applicationSupportDirectory
+    ) throws -> SymmetricKey {
+        try secureSupportDirectory(applicationSupportDirectory)
+        let keyURL = applicationSupportDirectory.appendingPathComponent("event.key")
 
         var info = stat()
         if lstat(keyURL.path, &info) == 0 {
@@ -64,12 +67,15 @@ public enum EventKeyStore {
         guard errno == ENOENT else { throw EventSecurityError.insecureKeyFile }
 
         let keyData = Data(SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) })
-        let descriptor = open(keyURL.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-        if descriptor < 0, errno == EEXIST {
-            return try loadOrCreateKey()
-        }
+        let temporaryURL = applicationSupportDirectory
+            .appendingPathComponent(".event-key-\(UUID().uuidString).tmp")
+        let descriptor = open(temporaryURL.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard descriptor >= 0 else { throw EventSecurityError.insecureKeyFile }
-        defer { close(descriptor) }
+        var temporaryExists = true
+        defer {
+            close(descriptor)
+            if temporaryExists { unlink(temporaryURL.path) }
+        }
         var written = 0
         while written < keyData.count {
             let result = keyData.withUnsafeBytes {
@@ -77,23 +83,33 @@ public enum EventKeyStore {
             }
             if result < 0, errno == EINTR { continue }
             guard result > 0 else {
-                unlink(keyURL.path)
                 throw EventSecurityError.insecureKeyFile
             }
             written += result
         }
         var createdInfo = stat()
         guard fstat(descriptor, &createdInfo) == 0, createdInfo.st_uid == getuid(),
-              (createdInfo.st_mode & 0o777) == 0o600, createdInfo.st_nlink == 1,
-              fsync(descriptor) == 0 else {
-            unlink(keyURL.path)
+               (createdInfo.st_mode & 0o777) == 0o600, createdInfo.st_nlink == 1,
+               fsync(descriptor) == 0 else {
             throw EventSecurityError.insecureKeyFile
         }
+        guard renameatx_np(
+            AT_FDCWD,
+            temporaryURL.path,
+            AT_FDCWD,
+            keyURL.path,
+            UInt32(RENAME_EXCL)
+        ) == 0 else {
+            if errno == EEXIST {
+                return try loadOrCreateKey(applicationSupportDirectory: applicationSupportDirectory)
+            }
+            throw EventSecurityError.insecureKeyFile
+        }
+        temporaryExists = false
         return SymmetricKey(data: keyData)
     }
 
-    private static func secureSupportDirectory() throws {
-        let directory = NotchBotPaths.applicationSupportDirectory
+    private static func secureSupportDirectory(_ directory: URL) throws {
         var info = stat()
         if lstat(directory.path, &info) != 0 {
             guard errno == ENOENT else { throw EventSecurityError.insecureSupportDirectory }
@@ -192,20 +208,23 @@ public enum SecurePermissionResponseEnvelope {
 
 public struct ReplayProtection: Sendable {
     private let capacity: Int
-    private var order: [Data] = []
+    private var ring: [Data?]
+    private var nextIndex = 0
     private var identifiers: Set<Data> = []
 
     public init(capacity: Int = 1_024) {
         self.capacity = max(1, capacity)
+        self.ring = Array(repeating: nil, count: max(1, capacity))
     }
 
     public mutating func accept(_ identifier: Data) -> Bool {
         guard !identifiers.contains(identifier) else { return false }
-        identifiers.insert(identifier)
-        order.append(identifier)
-        if order.count > capacity {
-            identifiers.remove(order.removeFirst())
+        if let evicted = ring[nextIndex] {
+            identifiers.remove(evicted)
         }
+        ring[nextIndex] = identifier
+        nextIndex = (nextIndex + 1) % capacity
+        identifiers.insert(identifier)
         return true
     }
 }

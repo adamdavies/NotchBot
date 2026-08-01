@@ -233,6 +233,69 @@ import Testing
     #expect(evicted)
 }
 
+@Test func replayProtectionRingWrapsAndRetainsOnlyTheNewestIdentifiers() {
+    var replay = ReplayProtection(capacity: 3)
+    let first = replay.accept(Data([1]))
+    let second = replay.accept(Data([2]))
+    let third = replay.accept(Data([3]))
+    let fourth = replay.accept(Data([4]))
+    let wrappedFirst = replay.accept(Data([1]))
+    let retainedThird = replay.accept(Data([3]))
+    let retainedFourth = replay.accept(Data([4]))
+    let wrappedSecond = replay.accept(Data([2]))
+    let retainedFirst = replay.accept(Data([1]))
+
+    #expect(first)
+    #expect(second)
+    #expect(third)
+    #expect(fourth)
+    #expect(wrappedFirst)
+    #expect(!retainedThird)
+    #expect(!retainedFourth)
+    #expect(wrappedSecond)
+    #expect(!retainedFirst)
+}
+
+@Test func eventKeyStoreUsesAnIsolatedApplicationSupportDirectory() throws {
+    let directory = URL(fileURLWithPath: "/tmp/notchbot-key-tests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let created = try EventKeyStore.loadOrCreateKey(applicationSupportDirectory: directory)
+    let loaded = try EventKeyStore.loadOrCreateKey(applicationSupportDirectory: directory)
+    #expect(created.withUnsafeBytes { Data($0) } == loaded.withUnsafeBytes { Data($0) })
+
+    var directoryInfo = stat()
+    var keyInfo = stat()
+    #expect(lstat(directory.path, &directoryInfo) == 0)
+    #expect((directoryInfo.st_mode & 0o777) == 0o700)
+    let keyPath = directory.appendingPathComponent("event.key").path
+    #expect(lstat(keyPath, &keyInfo) == 0)
+    #expect((keyInfo.st_mode & 0o777) == 0o600)
+}
+
+@Test func eventKeyStorePublishesOneCompleteKeyDuringConcurrentCreation() async throws {
+    let directory = URL(fileURLWithPath: "/tmp/notchbot-key-tests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let keys = try await withThrowingTaskGroup(of: Data.self) { group in
+        for _ in 0..<16 {
+            group.addTask {
+                let key = try EventKeyStore.loadOrCreateKey(applicationSupportDirectory: directory)
+                return key.withUnsafeBytes { Data($0) }
+            }
+        }
+        var results: [Data] = []
+        for try await key in group { results.append(key) }
+        return results
+    }
+
+    #expect(keys.count == 16)
+    #expect(Set(keys).count == 1)
+    #expect(keys.allSatisfy { $0.count == 32 })
+    let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+    #expect(entries == ["event.key"])
+}
+
 @Test func reducerRejectsOutOfOrderEventsIncludingAfterClear() {
     let start = Date(timeIntervalSince1970: 1_000)
     var reducer = ActivityReducer()

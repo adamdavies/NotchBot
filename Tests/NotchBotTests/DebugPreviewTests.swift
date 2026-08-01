@@ -8,6 +8,7 @@ import Testing
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let model = ActivityModel(defaults: defaults)
+    defer { model.shutdown() }
 
     model.setPreviewState(.working)
     model.setPreviewCoolnessTier(.crown)
@@ -35,12 +36,14 @@ import Testing
 
     DailyCoolnessPreference.save(completionCount: 35, to: defaults, now: now, calendar: calendar)
     let glowModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)
+    defer { glowModel.shutdown() }
     #expect(glowModel.coolnessTier == .glow)
     #expect(glowModel.queueCoolnessProgress == 0.4)
     #expect(glowModel.queueCoolnessProgressText == "40% to next")
 
     DailyCoolnessPreference.save(completionCount: 100, to: defaults, now: now, calendar: calendar)
     let crownModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)
+    defer { crownModel.shutdown() }
     #expect(crownModel.coolnessTier == .crown)
     #expect(crownModel.queueCoolnessProgress == 1)
     #expect(crownModel.queueCoolnessProgressText == "Max level")

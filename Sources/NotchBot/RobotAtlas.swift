@@ -2,11 +2,18 @@ import AppKit
 import Foundation
 import NotchBotCore
 
+@MainActor
 final class RobotAtlas {
     static let shared = RobotAtlas()
 
     private let image: CGImage?
     private let tileSize = 48
+    private var frames: [FrameKey: NSImage] = [:]
+
+    private struct FrameKey: Hashable {
+        let state: RobotState
+        let index: Int
+    }
 
     lazy var menuBarIcon: NSImage = {
         let logicalSize = 18
@@ -60,7 +67,7 @@ final class RobotAtlas {
         return result
     }()
 
-    private init() {
+    private convenience init() {
         let sourceResource = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .appendingPathComponent("Resources/RobotAtlas.png")
@@ -70,14 +77,17 @@ final class RobotAtlas {
             let url = resourceURL,
             let source = CGImageSourceCreateWithURL(url as CFURL, nil)
         else {
-            image = nil
+            self.init(image: nil)
             return
         }
-        image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        self.init(image: CGImageSourceCreateImageAtIndex(source, 0, nil))
+    }
+
+    init(image: CGImage?) {
+        self.image = image
     }
 
     func frame(state: RobotState, index: Int) -> NSImage {
-        guard let image else { return NSImage(size: NSSize(width: 24, height: 24)) }
         let row: Int
         let frameCount: Int
         switch state {
@@ -91,7 +101,16 @@ final class RobotAtlas {
             row = 2
             frameCount = 4
         }
-        let column = index % frameCount
+        let remainder = index % frameCount
+        let column = remainder >= 0 ? remainder : remainder + frameCount
+        let key = FrameKey(state: state, index: column)
+        if let cached = frames[key] {
+            return cached
+        }
+
+        guard let image else {
+            return cacheBlankFrame(for: key)
+        }
         let rect = CGRect(
             x: column * tileSize,
             y: row * tileSize,
@@ -99,10 +118,17 @@ final class RobotAtlas {
             height: tileSize
         )
         guard let cropped = image.cropping(to: rect) else {
-            return NSImage(size: NSSize(width: 24, height: 24))
+            return cacheBlankFrame(for: key)
         }
         let result = NSImage(cgImage: cropped, size: NSSize(width: 24, height: 24))
         result.isTemplate = false
+        frames[key] = result
+        return result
+    }
+
+    private func cacheBlankFrame(for key: FrameKey) -> NSImage {
+        let result = NSImage(size: NSSize(width: 24, height: 24))
+        frames[key] = result
         return result
     }
 }
