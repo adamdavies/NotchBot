@@ -140,7 +140,7 @@ final class ActivityModel: ObservableObject {
 
     var queueCoolnessProgressText: String {
         guard coolnessTier != .crown else { return "Max level" }
-        return "\(Int((queueCoolnessProgress * 100).rounded()))% to next"
+        return "\(Int((queueCoolnessProgress * 100).rounded()))%"
     }
 
     var dailyCostDisplayText: String {
@@ -349,7 +349,7 @@ final class ActivityModel: ObservableObject {
     }
 
     private func acknowledgeAttention(for session: SessionActivity) {
-        let sessionKey = session.id
+        let sessionKey = session.key
         expiryTasks.removeValue(forKey: sessionKey)?.cancel()
         let change = reducer.acknowledgeAttention(source: session.source, sessionID: session.sessionID)
         publish(change)
@@ -463,7 +463,7 @@ final class ActivityModel: ObservableObject {
     }
 
     private func cancelOrphanedExpiryTasks() {
-        let sessionIDs = Set(reducer.activities.map(\.id))
+        let sessionIDs = Set(reducer.activities.map(\.key))
         for key in expiryTasks.keys where !sessionIDs.contains(key) {
             expiryTasks.removeValue(forKey: key)?.cancel()
         }

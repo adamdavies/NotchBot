@@ -109,8 +109,8 @@ import Testing
     ))
 
     #expect(change.state == .working)
-    #expect(change.primarySession?.id.rawValue == "claude:one")
-    #expect(reducer.activities.map(\.id.rawValue) == ["claude:one"])
+    #expect(change.primarySession?.id == "claude:one")
+    #expect(reducer.activities.map(\.id) == ["claude:one"])
     #expect(reducer.activeCount == 1)
     #expect(reducer.attentionCount == 0)
 }
@@ -134,7 +134,7 @@ import Testing
     ))
 
     #expect(reducer.activities.map(\.taskLabel) == ["OpenCode task", "Claude task"])
-    #expect(Set(reducer.activities.map(\.id)).count == 2)
+    #expect(Set(reducer.activities.map(\.key)).count == 2)
 }
 
 @Test func activitiesHaveDeterministicOrderWhenTimestampsMatch() {
@@ -143,7 +143,7 @@ import Testing
     reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "z", timestamp: timestamp))
     reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "a", timestamp: timestamp))
 
-    #expect(reducer.activities.map(\.id.rawValue) == ["claude:a", "opencode:z"])
+    #expect(reducer.activities.map(\.id) == ["claude:a", "opencode:z"])
 }
 
 @Test func metadataOrderingDoesNotSuppressLifecycleEvents() {

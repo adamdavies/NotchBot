@@ -35,7 +35,8 @@ public struct SessionActivity: Equatable, Identifiable, Sendable {
 
     public var costUSD: Double?
 
-    public var id: SessionKey { SessionKey(source: source, sessionID: sessionID) }
+    public var key: SessionKey { SessionKey(source: source, sessionID: sessionID) }
+    public var id: String { key.rawValue }
     public var isSubagent: Bool { parentSessionID != nil }
     public var pendingRequestCount: Int { pendingRequests.count }
 }
@@ -407,7 +408,7 @@ public struct ActivityReducer: Sendable {
     private static func activityComesFirst(_ lhs: SessionActivity, _ rhs: SessionActivity) -> Bool {
         if lhs.state != rhs.state { return priority(lhs.state) > priority(rhs.state) }
         if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
-        return lhs.id < rhs.id
+        return lhs.key < rhs.key
     }
 
     private func normalizedParentSessionID(
@@ -460,11 +461,11 @@ public struct ActivityReducer: Sendable {
                 guard let child = sessions[childKey], let parentSessionID = child.parentSessionID else { return false }
                 return Self.key(source: child.source, sessionID: parentSessionID) == key
             }.compactMap { sessions[$0] }.sorted(by: Self.activityComesFirst)
-            for child in children { append(child.id) }
+            for child in children { append(child.key) }
         }
         append(rootKey)
         for leftover in members.compactMap({ sessions[$0] }).sorted(by: Self.activityComesFirst) {
-            append(leftover.id)
+            append(leftover.key)
         }
         return result
     }

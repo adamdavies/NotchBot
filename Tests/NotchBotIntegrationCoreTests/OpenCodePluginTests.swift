@@ -50,6 +50,19 @@ import Testing
     #expect(plugin.contains("const hookPath = \"/tmp/a\\\"b\\\\c\""))
 }
 
+@Test(arguments: ["{{COST_STATE}}", "{{COST_PAYLOAD}}", "{{COST_EVENT}}", "{{COST_CLEANUP}}"])
+func pluginPreservesPlaceholderTextInHookPath(placeholder: String) {
+    let hookPath = "/tmp/\(placeholder)/notchbot-hook"
+
+    for includeCostTracking in [false, true] {
+        let plugin = OpenCodePlugin.generate(
+            hookPath: hookPath,
+            includeCostTracking: includeCostTracking
+        )
+        #expect(plugin.contains("const hookPath = \"\(hookPath)\""))
+    }
+}
+
 @Test func requestRepliesResolveOnlyTheirExactRequest() throws {
     let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook")
     let resolution = try #require(plugin.range(of: "event.type === \"permission.replied\""))

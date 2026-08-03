@@ -106,8 +106,11 @@ struct CostTrackingManager {
         )
     }
 
-    func disable() throws {
-        let state = try? readState()
+    func disable(updatePlugin: Bool = true) throws {
+        if updatePlugin, store.itemExists(at: paths.openCodePlugin),
+           !(try ownership.isOwnedPlugin(at: paths.openCodePlugin)) {
+            throw IntegrationError.unrelatedManagedFile(paths.openCodePlugin.path)
+        }
         let wrapperIsOwned: Bool
         if store.itemExists(at: paths.statusLineWrapper), try store.regularFile(at: paths.statusLineWrapper) {
             let wrapper = try store.boundedString(at: paths.statusLineWrapper, maximum: 128 * 1_024)
@@ -116,12 +119,14 @@ struct CostTrackingManager {
             wrapperIsOwned = false
         }
         let settingsURL = paths.claudeSettings
+        var state: StatusLineWrapperState?
         if store.itemExists(at: settingsURL) {
             guard try store.regularFile(at: settingsURL) else { throw IntegrationError.unsafeClaudeSettings }
             let originalData = try store.boundedData(at: settingsURL, maximum: 4 * 1_024 * 1_024)
             let originalMode = try store.fileMode(at: settingsURL) ?? 0o600
             var claudeSettings = try store.decodeJSONObject(originalData)
             if isManagedStatusLine(claudeSettings["statusLine"]) {
+                state = try readState()
                 if let saved = state?.originalStatusLineJSON {
                     guard let object = try JSONSerialization.jsonObject(with: saved) as? [String: Any] else {
                         throw IntegrationError.invalidManagedFile(paths.statusLineState.path)
@@ -137,11 +142,11 @@ struct CostTrackingManager {
                 )
             }
         }
+        if state == nil {
+            state = try? readState()
+        }
 
-        if store.itemExists(at: paths.openCodePlugin) {
-            guard try ownership.isOwnedPlugin(at: paths.openCodePlugin) else {
-                throw IntegrationError.unrelatedManagedFile(paths.openCodePlugin.path)
-            }
+        if updatePlugin, store.itemExists(at: paths.openCodePlugin) {
             try plugin.write(hookURL: paths.installedHook, includeCostTracking: false)
         }
         if wrapperIsOwned { try? store.fileManager.removeItem(at: paths.statusLineWrapper) }

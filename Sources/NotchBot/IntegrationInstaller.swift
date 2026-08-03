@@ -103,10 +103,6 @@ final class IntegrationInstaller: ObservableObject {
 
     func uninstall() {
         do {
-            if costTrackingEnabled || store.itemExists(at: paths.statusLineState) {
-                try costTracking.disable()
-                clearCostTrackingPreferences()
-            }
             let pluginExists = store.itemExists(at: paths.openCodePlugin)
             let pluginIsLegacy = pluginExists
                 ? try ownership.isLegacyPlugin(at: paths.openCodePlugin)
@@ -127,6 +123,11 @@ final class IntegrationInstaller: ObservableObject {
             }
             if store.itemExists(at: paths.installStatus), !(try ownership.isOwnedInstallStatus()) {
                 throw IntegrationError.unrelatedManagedFile(paths.installStatus.path)
+            }
+
+            if costTrackingEnabled || store.itemExists(at: paths.statusLineState) {
+                try costTracking.disable(updatePlugin: false)
+                clearCostTrackingPreferences()
             }
 
             try settings.updateManagedHooks(install: false)
