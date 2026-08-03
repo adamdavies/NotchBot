@@ -53,7 +53,8 @@ public struct DailyCoolnessTracker: Sendable {
     @discardableResult
     public mutating func apply(_ event: AgentEvent, isTopLevel: Bool) -> Bool {
         guard isTopLevel else { return false }
-        let key = "\(event.source.rawValue):\(event.sessionID)"
+        // `completedCycles` is persisted, so keep the textual form rather than the struct.
+        let key = SessionKey(event: event).rawValue
 
         if event.kind == .working {
             completedCycles.remove(key)

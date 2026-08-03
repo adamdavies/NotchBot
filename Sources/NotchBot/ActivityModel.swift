@@ -48,7 +48,7 @@ final class ActivityModel: ObservableObject {
     private var reducer = ActivityReducer()
     private var coolnessTracker: DailyCoolnessTracker
     private var costTracker: DailyCostTracker
-    private var expiryTasks: [String: Task<Void, Never>] = [:]
+    private var expiryTasks: [SessionKey: Task<Void, Never>] = [:]
     private var maintenanceTask: Task<Void, Never>?
     private let defaults: UserDefaults
     private let calendar: Calendar
@@ -140,7 +140,7 @@ final class ActivityModel: ObservableObject {
 
     var queueCoolnessProgressText: String {
         guard coolnessTier != .crown else { return "Max level" }
-        return "\(Int((queueCoolnessProgress * 100).rounded()))% to next"
+        return "\(Int((queueCoolnessProgress * 100).rounded()))%"
     }
 
     var dailyCostDisplayText: String {
@@ -349,7 +349,7 @@ final class ActivityModel: ObservableObject {
     }
 
     private func acknowledgeAttention(for session: SessionActivity) {
-        let sessionKey = session.id
+        let sessionKey = session.key
         expiryTasks.removeValue(forKey: sessionKey)?.cancel()
         let change = reducer.acknowledgeAttention(source: session.source, sessionID: session.sessionID)
         publish(change)
@@ -458,12 +458,12 @@ final class ActivityModel: ObservableObject {
         activeSessions = reducer.activities
     }
 
-    private func key(for event: AgentEvent) -> String {
-        "\(event.source.rawValue):\(event.sessionID)"
+    private func key(for event: AgentEvent) -> SessionKey {
+        SessionKey(event: event)
     }
 
     private func cancelOrphanedExpiryTasks() {
-        let sessionIDs = Set(reducer.activities.map(\.id))
+        let sessionIDs = Set(reducer.activities.map(\.key))
         for key in expiryTasks.keys where !sessionIDs.contains(key) {
             expiryTasks.removeValue(forKey: key)?.cancel()
         }

@@ -55,7 +55,7 @@ import Testing
     #expect(try String(contentsOf: fixture.helperOwnershipURL, encoding: .utf8)
         == NotchBotIntegrationFiles.helperOwnershipMarker)
     let status = try JSONDecoder().decode(IntegrationInstallStatus.self, from: Data(contentsOf: fixture.installStatusURL))
-    #expect(status.version == 17)
+    #expect(status.version == 18)
 }
 
 @MainActor
@@ -81,6 +81,58 @@ import Testing
     let restored = try #require(try fixture.settings()["statusLine"] as? [String: Any])
     #expect(NSDictionary(dictionary: restored).isEqual(to: originalStatusLine))
     #expect(try fixture.settings()["custom"] as? Bool == true)
+}
+
+@MainActor
+@Test(arguments: ["missing", "malformed"])
+func disablingCostTrackingPreservesSettingsWithoutValidRecoveryState(stateCondition: String) throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let originalStatusLine: [String: Any] = [
+        "type": "command",
+        "command": "custom-status --flag",
+    ]
+    try fixture.writeSettings(["statusLine": originalStatusLine])
+    let installer = fixture.installer()
+    installer.install()
+    installer.enableCostTracking()
+    let enabledSettings = try Data(contentsOf: fixture.settingsURL)
+
+    if stateCondition == "missing" {
+        try FileManager.default.removeItem(at: fixture.statusLineStateURL)
+    } else {
+        try Data("not valid state".utf8).write(to: fixture.statusLineStateURL)
+    }
+    installer.disableCostTracking()
+
+    #expect(installer.message.contains("Managed file is invalid"))
+    #expect(try Data(contentsOf: fixture.settingsURL) == enabledSettings)
+    #expect(installer.costTrackingEnabled)
+}
+
+@MainActor
+@Test func uninstallValidatesOwnershipBeforeChangingCostTrackingSettings() throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let originalStatusLine: [String: Any] = [
+        "type": "command",
+        "command": "custom-status --flag",
+    ]
+    try fixture.writeSettings(["statusLine": originalStatusLine])
+    let installer = fixture.installer()
+    installer.install()
+    installer.enableCostTracking()
+    let enabledSettings = try Data(contentsOf: fixture.settingsURL)
+    try Data("unrelated".utf8).write(to: fixture.pluginURL)
+
+    installer.uninstall()
+
+    #expect(installer.message.contains("Refusing to replace"))
+    #expect(try Data(contentsOf: fixture.settingsURL) == enabledSettings)
+    #expect(try Data(contentsOf: fixture.pluginURL) == Data("unrelated".utf8))
+    #expect(FileManager.default.fileExists(atPath: fixture.helperURL.path))
+    #expect(FileManager.default.fileExists(atPath: fixture.statusLineStateURL.path))
+    #expect(installer.costTrackingEnabled)
 }
 
 @MainActor
@@ -237,6 +289,7 @@ private final class InstallerFixture {
     var backupDirectory: URL { NotchBotIntegrationFiles.backupDirectoryURL(applicationSupportDirectory: support) }
     var helperOwnershipURL: URL { NotchBotIntegrationFiles.helperOwnershipURL(helperURL: helperURL) }
     var installStatusURL: URL { NotchBotIntegrationFiles.installStatusURL(applicationSupportDirectory: support) }
+    var statusLineStateURL: URL { support.appendingPathComponent("statusline-state.json") }
 
     @MainActor func installer(
         makeUUID: @escaping () -> UUID = UUID.init,

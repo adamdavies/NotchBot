@@ -27,7 +27,7 @@ import Testing
     #expect(!model.isPreviewing)
 }
 
-@Test @MainActor func queueCoolnessProgressDescribesTheNextLevel() throws {
+@Test @MainActor func queueCoolnessProgressDescribesTheCurrentTierInterval() throws {
     let suiteName = "QueueCoolnessProgressTests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -39,7 +39,7 @@ import Testing
     defer { glowModel.shutdown() }
     #expect(glowModel.coolnessTier == .glow)
     #expect(glowModel.queueCoolnessProgress == 0.4)
-    #expect(glowModel.queueCoolnessProgressText == "40% to next")
+    #expect(glowModel.queueCoolnessProgressText == "40%")
 
     DailyCoolnessPreference.save(completionCount: 100, to: defaults, now: now, calendar: calendar)
     let crownModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)

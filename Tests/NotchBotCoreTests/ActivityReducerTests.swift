@@ -134,7 +134,7 @@ import Testing
     ))
 
     #expect(reducer.activities.map(\.taskLabel) == ["OpenCode task", "Claude task"])
-    #expect(Set(reducer.activities.map(\.id)).count == 2)
+    #expect(Set(reducer.activities.map(\.key)).count == 2)
 }
 
 @Test func activitiesHaveDeterministicOrderWhenTimestampsMatch() {
@@ -1055,4 +1055,16 @@ import Testing
     #expect(reducer.primarySession?.state == .working)
     #expect(reducer.primarySession?.reason == nil)
     #expect(reducer.primarySession?.permission == nil)
+}
+
+@Test func sessionKeyIdentityIsSourceScopedAndTextuallyStable() {
+    let claude = SessionKey(source: .claude, sessionID: "abc")
+    let openCode = SessionKey(source: .opencode, sessionID: "abc")
+    #expect(claude != openCode)
+    #expect(claude == SessionKey(source: .claude, sessionID: "abc"))
+    // DailyCoolness persists this string; changing it would orphan stored progress.
+    #expect(claude.rawValue == "claude:abc")
+    #expect(openCode.rawValue == "opencode:abc")
+    #expect(claude < openCode)
+    #expect(SessionKey(event: AgentEvent(source: .opencode, kind: .working, sessionID: "abc")) == openCode)
 }
