@@ -48,7 +48,7 @@ final class ActivityModel: ObservableObject {
     private var reducer = ActivityReducer()
     private var coolnessTracker: DailyCoolnessTracker
     private var costTracker: DailyCostTracker
-    private var expiryTasks: [String: Task<Void, Never>] = [:]
+    private var expiryTasks: [SessionKey: Task<Void, Never>] = [:]
     private var maintenanceTask: Task<Void, Never>?
     private let defaults: UserDefaults
     private let calendar: Calendar
@@ -458,8 +458,8 @@ final class ActivityModel: ObservableObject {
         activeSessions = reducer.activities
     }
 
-    private func key(for event: AgentEvent) -> String {
-        "\(event.source.rawValue):\(event.sessionID)"
+    private func key(for event: AgentEvent) -> SessionKey {
+        SessionKey(event: event)
     }
 
     private func cancelOrphanedExpiryTasks() {

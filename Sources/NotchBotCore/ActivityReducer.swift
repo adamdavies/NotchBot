@@ -35,7 +35,7 @@ public struct SessionActivity: Equatable, Identifiable, Sendable {
 
     public var costUSD: Double?
 
-    public var id: String { "\(source.rawValue):\(sessionID)" }
+    public var id: SessionKey { SessionKey(source: source, sessionID: sessionID) }
     public var isSubagent: Bool { parentSessionID != nil }
     public var pendingRequestCount: Int { pendingRequests.count }
 }
@@ -49,15 +49,15 @@ public struct ActivityChange: Equatable, Sendable {
 public struct ActivityReducer: Sendable {
     public static let maximumSessions = 256
 
-    private var sessions: [String: SessionActivity] = [:]
-    private var latestEventAt: [String: Date] = [:]
-    private var latestMetadataAt: [String: Date] = [:]
+    private var sessions: [SessionKey: SessionActivity] = [:]
+    private var latestEventAt: [SessionKey: Date] = [:]
+    private var latestMetadataAt: [SessionKey: Date] = [:]
     private var latestRequestAt: [RequestEventKey: Date] = [:]
     private var resolvedRequests: Set<RequestEventKey> = []
     private var acknowledgedRequests: Set<RequestEventKey> = []
     private var acknowledgedLegacyPermissions: Set<String> = []
-    private var latestClearedAt: [String: Date] = [:]
-    private var pendingMetadata: [String: PendingMetadata] = [:]
+    private var latestClearedAt: [SessionKey: Date] = [:]
+    private var pendingMetadata: [SessionKey: PendingMetadata] = [:]
 
     public init() {}
 
@@ -266,10 +266,13 @@ public struct ActivityReducer: Sendable {
 
     public mutating func removeSessions(olderThan cutoff: Date) {
         let staleKeys = sessions.compactMap { $0.value.updatedAt < cutoff ? $0.key : nil }
+        // Built once for the whole sweep. Keys removed by an earlier iteration stay in the
+        // index, but every lookup filters through `sessions`, so a stale entry is a no-op.
+        let childKeys = childKeysByParent()
         for key in staleKeys where sessions[key] != nil {
-            let subtree = treeKeys(rootedAt: key)
+            let subtree = treeKeys(rootedAt: key, childKeys: childKeys)
             if subtree.compactMap({ sessions[$0] }).allSatisfy({ $0.updatedAt < cutoff }) {
-                removeTree(rootedAt: key)
+                removeTree(rootedAt: key, childKeys: childKeys)
             }
         }
         latestEventAt = latestEventAt.filter { $0.value >= cutoff }
@@ -377,8 +380,8 @@ public struct ActivityReducer: Sendable {
         sessions.values.reduce(0) { $0 + $1.pendingRequests.count }
     }
 
-    private static func key(source: AgentSource, sessionID: String) -> String {
-        "\(source.rawValue):\(sessionID)"
+    private static func key(source: AgentSource, sessionID: String) -> SessionKey {
+        SessionKey(source: source, sessionID: sessionID)
     }
 
     private static func requestKey(event: AgentEvent, request: AgentRequestUpdate) -> RequestEventKey {
@@ -409,14 +412,14 @@ public struct ActivityReducer: Sendable {
 
     private func normalizedParentSessionID(
         _ parentSessionID: String?,
-        for key: String,
+        for key: SessionKey,
         source: AgentSource
     ) -> String? {
         guard let parentSessionID else { return nil }
         let parentKey = Self.key(source: source, sessionID: parentSessionID)
         guard parentKey != key else { return nil }
-        var current: String? = parentKey
-        var visited: Set<String> = []
+        var current: SessionKey? = parentKey
+        var visited: Set<SessionKey> = []
         while let candidate = current {
             guard candidate != key else { return nil }
             guard let session = sessions[candidate] else { break }
@@ -426,9 +429,9 @@ public struct ActivityReducer: Sendable {
         return parentSessionID
     }
 
-    private func rootKey(for key: String) -> String {
+    private func rootKey(for key: SessionKey) -> SessionKey {
         var current = key
-        var visited: Set<String> = []
+        var visited: Set<SessionKey> = []
         while let session = sessions[current], let parentSessionID = session.parentSessionID {
             guard visited.insert(current).inserted else { return key }
             let parentKey = Self.key(source: session.source, sessionID: parentSessionID)
@@ -438,7 +441,7 @@ public struct ActivityReducer: Sendable {
         return current
     }
 
-    private func groupSortValue(for keys: [String]) -> (priority: Int, updatedAt: Date) {
+    private func groupSortValue(for keys: [SessionKey]) -> (priority: Int, updatedAt: Date) {
         keys.compactMap { sessions[$0] }.reduce((priority: -1, updatedAt: .distantPast)) { result, session in
             let priority = Self.priority(session.state)
             if priority > result.priority { return (priority, session.updatedAt) }
@@ -447,10 +450,10 @@ public struct ActivityReducer: Sendable {
         }
     }
 
-    private func flattenedGroup(rootKey: String, members: Set<String>) -> [SessionActivity] {
+    private func flattenedGroup(rootKey: SessionKey, members: Set<SessionKey>) -> [SessionActivity] {
         var result: [SessionActivity] = []
-        var visited: Set<String> = []
-        func append(_ key: String) {
+        var visited: Set<SessionKey> = []
+        func append(_ key: SessionKey) {
             guard members.contains(key), visited.insert(key).inserted, let session = sessions[key] else { return }
             result.append(session)
             let children = members.filter { childKey in
@@ -466,8 +469,12 @@ public struct ActivityReducer: Sendable {
         return result
     }
 
-    private mutating func removeTree(rootedAt rootKey: String, clearedAt: Date? = nil) {
-        let keysToRemove = treeKeys(rootedAt: rootKey)
+    private mutating func removeTree(
+        rootedAt rootKey: SessionKey,
+        clearedAt: Date? = nil,
+        childKeys: [SessionKey: [SessionKey]]? = nil
+    ) {
+        let keysToRemove = treeKeys(rootedAt: rootKey, childKeys: childKeys)
         for key in keysToRemove {
             if let session = sessions.removeValue(forKey: key) {
                 for request in session.pendingRequests {
@@ -493,7 +500,7 @@ public struct ActivityReducer: Sendable {
         }
     }
 
-    private mutating func applyRequestOverlay(to key: String) {
+    private mutating func applyRequestOverlay(to key: SessionKey) {
         guard var session = sessions[key] else { return }
         if let request = session.pendingRequests.first {
             let presentedRequest = session.pendingRequests.first(where: { $0.permission != nil }) ?? request
@@ -521,26 +528,29 @@ public struct ActivityReducer: Sendable {
         sessions[key] = session
     }
 
-    private func treeKeys(rootedAt rootKey: String) -> Set<String> {
-        var keys: Set<String> = [rootKey]
-        var foundDescendant = true
-        while foundDescendant {
-            foundDescendant = false
-            for (key, session) in sessions where !keys.contains(key) {
-                guard let parentSessionID = session.parentSessionID else { continue }
-                let parentKey = Self.key(source: session.source, sessionID: parentSessionID)
-                if keys.contains(parentKey) {
-                    keys.insert(key)
-                    foundDescendant = true
-                }
-            }
-            for (key, metadata) in pendingMetadata where !keys.contains(key) {
-                guard let parentSessionID = metadata.parentSessionID else { continue }
-                let parentKey = Self.key(source: metadata.source, sessionID: parentSessionID)
-                if keys.contains(parentKey) {
-                    keys.insert(key)
-                    foundDescendant = true
-                }
+    private func childKeysByParent() -> [SessionKey: [SessionKey]] {
+        var index: [SessionKey: [SessionKey]] = [:]
+        for (key, session) in sessions {
+            guard let parentSessionID = session.parentSessionID else { continue }
+            index[Self.key(source: session.source, sessionID: parentSessionID), default: []].append(key)
+        }
+        for (key, metadata) in pendingMetadata {
+            guard let parentSessionID = metadata.parentSessionID else { continue }
+            index[Self.key(source: metadata.source, sessionID: parentSessionID), default: []].append(key)
+        }
+        return index
+    }
+
+    private func treeKeys(
+        rootedAt rootKey: SessionKey,
+        childKeys: [SessionKey: [SessionKey]]? = nil
+    ) -> Set<SessionKey> {
+        let index = childKeys ?? childKeysByParent()
+        var keys: Set<SessionKey> = [rootKey]
+        var pending = [rootKey]
+        while let key = pending.popLast() {
+            for child in index[key] ?? [] where keys.insert(child).inserted {
+                pending.append(child)
             }
         }
         return keys

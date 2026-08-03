@@ -109,8 +109,8 @@ import Testing
     ))
 
     #expect(change.state == .working)
-    #expect(change.primarySession?.id == "claude:one")
-    #expect(reducer.activities.map(\.id) == ["claude:one"])
+    #expect(change.primarySession?.id.rawValue == "claude:one")
+    #expect(reducer.activities.map(\.id.rawValue) == ["claude:one"])
     #expect(reducer.activeCount == 1)
     #expect(reducer.attentionCount == 0)
 }
@@ -143,7 +143,7 @@ import Testing
     reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "z", timestamp: timestamp))
     reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "a", timestamp: timestamp))
 
-    #expect(reducer.activities.map(\.id) == ["claude:a", "opencode:z"])
+    #expect(reducer.activities.map(\.id.rawValue) == ["claude:a", "opencode:z"])
 }
 
 @Test func metadataOrderingDoesNotSuppressLifecycleEvents() {
@@ -1055,4 +1055,16 @@ import Testing
     #expect(reducer.primarySession?.state == .working)
     #expect(reducer.primarySession?.reason == nil)
     #expect(reducer.primarySession?.permission == nil)
+}
+
+@Test func sessionKeyIdentityIsSourceScopedAndTextuallyStable() {
+    let claude = SessionKey(source: .claude, sessionID: "abc")
+    let openCode = SessionKey(source: .opencode, sessionID: "abc")
+    #expect(claude != openCode)
+    #expect(claude == SessionKey(source: .claude, sessionID: "abc"))
+    // DailyCoolness persists this string; changing it would orphan stored progress.
+    #expect(claude.rawValue == "claude:abc")
+    #expect(openCode.rawValue == "opencode:abc")
+    #expect(claude < openCode)
+    #expect(SessionKey(event: AgentEvent(source: .opencode, kind: .working, sessionID: "abc")) == openCode)
 }
