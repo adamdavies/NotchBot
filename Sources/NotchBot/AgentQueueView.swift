@@ -88,8 +88,9 @@ struct AgentQueueView: View {
     }
 
     private func rowHeight(for session: SessionActivity) -> CGFloat {
-        guard let permission = session.permission else { return 70 }
-        return permission.context == nil ? 120 : 150
+        let activityHeight: CGFloat = session.activityDescription == nil ? 0 : 20
+        guard let permission = session.permission else { return 70 + activityHeight }
+        return (permission.context == nil ? 120 : 150) + activityHeight
     }
 }
 
@@ -142,6 +143,16 @@ private struct AgentQueueRow: View {
                 .foregroundStyle(.white.opacity(0.5))
                 .accessibilityLabel("Clear \(title) from queue")
                 .help("Clear this queue entry")
+            }
+
+            if let activityDescription = session.activityDescription {
+                Text(activityDescription)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, session.isSubagent ? 28 : 18)
+                    .accessibilityLabel("Current activity: \(activityDescription)")
             }
 
             HStack(spacing: 5) {
@@ -223,7 +234,7 @@ private struct AgentQueueRow: View {
     }
 
     private var title: String {
-        session.taskLabel ?? projectName ?? sourceName
+        session.sessionTitle ?? projectName ?? sourceName
     }
 
     private var projectName: String? {

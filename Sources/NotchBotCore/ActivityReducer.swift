@@ -24,7 +24,8 @@ public struct SessionActivity: Equatable, Identifiable, Sendable {
     public var terminalBundleIdentifier: String?
     public var terminalProcessID: Int32?
     public var reason: String?
-    public var taskLabel: String?
+    public var sessionTitle: String?
+    public var activityDescription: String?
     public var permission: AgentPermissionRequest?
     public var isAwaitingPermissionResolution: Bool
     public var pendingRequests: [AgentPendingRequest]
@@ -53,6 +54,8 @@ public struct ActivityReducer: Sendable {
     private var sessions: [SessionKey: SessionActivity] = [:]
     private var latestEventAt: [SessionKey: Date] = [:]
     private var latestMetadataAt: [SessionKey: Date] = [:]
+    private var latestSessionTitleAt: [SessionKey: Date] = [:]
+    private var latestActivityAt: [SessionKey: Date] = [:]
     private var latestRequestAt: [RequestEventKey: Date] = [:]
     private var resolvedRequests: Set<RequestEventKey> = []
     private var acknowledgedRequests: Set<RequestEventKey> = []
@@ -89,6 +92,12 @@ public struct ActivityReducer: Sendable {
         if let rejected = rejectDescendantOfClearedSession(event) { return rejected }
         let key = Self.key(source: event.source, sessionID: event.sessionID)
         guard canApply(event) else { return currentChange() }
+        let appliesSessionTitle = event.sessionTitle != nil
+            && (latestSessionTitleAt[key].map { event.timestamp > $0 } ?? true)
+        let appliesActivity = event.activityDescription != nil
+            && (latestActivityAt[key].map { event.timestamp > $0 } ?? true)
+        if appliesSessionTitle { latestSessionTitleAt[key] = event.timestamp }
+        if appliesActivity { latestActivityAt[key] = event.timestamp }
         if let request = event.request {
             let requestKey = Self.requestKey(event: event, request: request)
             latestRequestAt[requestKey] = max(event.timestamp, latestRequestAt[requestKey] ?? .distantPast)
@@ -129,9 +138,8 @@ public struct ActivityReducer: Sendable {
                !session.hasProviderActivity || session.providerUpdatedAt <= parentClearedAt {
                 removeTree(rootedAt: key, clearedAt: parentClearedAt)
             } else if sessions[key] != nil {
-                if let taskLabel = event.taskLabel {
-                    sessions[key]?.taskLabel = taskLabel
-                }
+                if appliesSessionTitle { sessions[key]?.sessionTitle = event.sessionTitle }
+                if appliesActivity { sessions[key]?.activityDescription = event.activityDescription }
                 if let parentSessionID, event.timestamp >= sessions[key]!.updatedAt {
                     sessions[key]?.parentSessionID = parentSessionID
                 }
@@ -139,15 +147,19 @@ public struct ActivityReducer: Sendable {
                     sessions[key]?.costUSD = cost
                 }
             } else if parentClearedAt == nil
-                && (event.taskLabel != nil || parentSessionID != nil || event.costUSD != nil) {
+                && (appliesSessionTitle || appliesActivity || parentSessionID != nil || event.costUSD != nil) {
                 if pendingMetadata[key] == nil, pendingMetadata.count >= Self.maximumSessions,
                    let oldest = pendingMetadata.min(by: { $0.value.updatedAt < $1.value.updatedAt })?.key {
                     pendingMetadata.removeValue(forKey: oldest)
                     latestMetadataAt.removeValue(forKey: oldest)
+                    latestSessionTitleAt.removeValue(forKey: oldest)
+                    latestActivityAt.removeValue(forKey: oldest)
                 }
                 pendingMetadata[key] = PendingMetadata(
                     source: event.source,
-                    taskLabel: event.taskLabel ?? pendingMetadata[key]?.taskLabel,
+                    sessionTitle: appliesSessionTitle ? event.sessionTitle : pendingMetadata[key]?.sessionTitle,
+                    activityDescription: appliesActivity
+                        ? event.activityDescription : pendingMetadata[key]?.activityDescription,
                     parentSessionID: parentSessionID ?? pendingMetadata[key]?.parentSessionID,
                     costUSD: [event.costUSD, pendingMetadata[key]?.costUSD].compactMap { $0 }.max(),
                     updatedAt: event.timestamp
@@ -231,7 +243,11 @@ public struct ActivityReducer: Sendable {
                 terminalBundleIdentifier: event.terminalBundleIdentifier ?? sessions[key]?.terminalBundleIdentifier,
                 terminalProcessID: event.terminalProcessID ?? sessions[key]?.terminalProcessID,
                 reason: hasPendingRequests ? displayedRequest?.reason : providerReason,
-                taskLabel: event.taskLabel ?? sessions[key]?.taskLabel ?? pendingMetadata[key]?.taskLabel,
+                sessionTitle: appliesSessionTitle
+                    ? event.sessionTitle : sessions[key]?.sessionTitle ?? pendingMetadata[key]?.sessionTitle,
+                activityDescription: appliesActivity
+                    ? event.activityDescription
+                    : sessions[key]?.activityDescription ?? pendingMetadata[key]?.activityDescription,
                 permission: presentedRequest?.permission ?? legacyPermission,
                 isAwaitingPermissionResolution: hasPendingRequests || legacyPermission != nil
                     || (preservesLegacyPermission && previousSession?.isAwaitingPermissionResolution == true),
@@ -278,6 +294,12 @@ public struct ActivityReducer: Sendable {
         }
         latestEventAt = latestEventAt.filter { $0.value >= cutoff }
         latestMetadataAt = latestMetadataAt.filter { $0.value >= cutoff }
+        latestSessionTitleAt = latestSessionTitleAt.filter {
+            $0.value >= cutoff || sessions[$0.key] != nil || pendingMetadata[$0.key] != nil
+        }
+        latestActivityAt = latestActivityAt.filter {
+            $0.value >= cutoff || sessions[$0.key] != nil || pendingMetadata[$0.key] != nil
+        }
         latestRequestAt = latestRequestAt.filter { $0.value >= cutoff }
         resolvedRequests = resolvedRequests.filter { latestRequestAt[$0] != nil }
         acknowledgedRequests = acknowledgedRequests.filter { latestRequestAt[$0] != nil }
@@ -497,6 +519,8 @@ public struct ActivityReducer: Sendable {
                 latestClearedAt.removeValue(forKey: key)
             }
             latestMetadataAt.removeValue(forKey: key)
+            latestSessionTitleAt.removeValue(forKey: key)
+            latestActivityAt.removeValue(forKey: key)
             pendingMetadata.removeValue(forKey: key)
         }
     }
@@ -588,7 +612,8 @@ public struct ActivityReducer: Sendable {
 
 private struct PendingMetadata: Sendable {
     let source: AgentSource
-    let taskLabel: String?
+    let sessionTitle: String?
+    let activityDescription: String?
     let parentSessionID: String?
     let costUSD: Double?
     let updatedAt: Date

@@ -72,7 +72,7 @@ public struct AgentPermissionRequest: Codable, Equatable, Sendable {
 }
 
 public struct AgentEvent: Codable, Equatable, Sendable {
-    public static let protocolVersion = 3
+    public static let protocolVersion = 4
 
     public let version: Int
     public let source: AgentSource
@@ -85,7 +85,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
     public let terminalProcessID: Int32?
     public let reason: String?
     public let expiresAfter: TimeInterval?
-    public let taskLabel: String?
+    public let sessionTitle: String?
+    public let activityDescription: String?
     public let permission: AgentPermissionRequest?
     public let request: AgentRequestUpdate?
     public let costUSD: Double?
@@ -102,7 +103,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         terminalProcessID: Int32? = nil,
         reason: String? = nil,
         expiresAfter: TimeInterval? = nil,
-        taskLabel: String? = nil,
+        sessionTitle: String? = nil,
+        activityDescription: String? = nil,
         permission: AgentPermissionRequest? = nil,
         request: AgentRequestUpdate? = nil,
         costUSD: Double? = nil,
@@ -119,7 +121,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.terminalProcessID = terminalProcessID
         self.reason = reason
         self.expiresAfter = expiresAfter
-        self.taskLabel = AgentTaskLabel.normalized(taskLabel)
+        self.sessionTitle = AgentPresentationText.normalized(sessionTitle)
+        self.activityDescription = AgentPresentationText.normalized(activityDescription)
         self.permission = permission
         self.request = request
         self.costUSD = costUSD
@@ -183,11 +186,8 @@ public enum AgentEventValidator {
         try check(event.workingDirectory, name: "workingDirectory", maximumBytes: 1_024)
         try check(event.terminalBundleIdentifier, name: "terminalBundleIdentifier", maximumBytes: 255)
         try check(event.reason, name: "reason", maximumBytes: 256)
-        try check(event.taskLabel, name: "taskLabel", maximumBytes: AgentTaskLabel.maximumBytes)
-        if let taskLabel = event.taskLabel,
-           taskLabel.count > AgentTaskLabel.maximumCharacters || AgentTaskLabel.normalized(taskLabel) != taskLabel {
-                throw AgentEventValidationError.stringTooLong("taskLabel")
-        }
+        try validatePresentationText(event.sessionTitle, name: "sessionTitle")
+        try validatePresentationText(event.activityDescription, name: "activityDescription")
         if let permission = event.permission {
             guard event.kind == .attention, event.source != .preview,
                    validResponseToken(permission.responseToken),
@@ -242,6 +242,14 @@ public enum AgentEventValidator {
         }
     }
 
+    private static func validatePresentationText(_ value: String?, name: String) throws {
+        try check(value, name: name, maximumBytes: AgentPresentationText.maximumBytes)
+        if let value,
+           value.count > AgentPresentationText.maximumCharacters || AgentPresentationText.normalized(value) != value {
+            throw AgentEventValidationError.stringTooLong(name)
+        }
+    }
+
     private static func validIdentifier(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 128
             && !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
@@ -254,7 +262,7 @@ public enum AgentEventValidator {
     }
 }
 
-public enum AgentTaskLabel {
+public enum AgentPresentationText {
     public static let maximumCharacters = 100
     public static let maximumBytes = 512
 

@@ -88,7 +88,8 @@ public enum HookInput {
             cwd: bounded(decoded.cwd, bytes: 1_024),
             sessionTitle: boundedLabel(decoded.sessionTitle),
             agentType: boundedLabel(decoded.agentType),
-            taskLabel: boundedLabel(decoded.taskLabel),
+            activityDescription: boundedLabel(decoded.activityDescription),
+            claudeToolActivityDescription: claudeToolActivityDescription(from: decoded),
             agentID: try validatedIdentifier(decoded.agentID),
             parentSessionID: try validatedIdentifier(decoded.parentSessionID),
             permissionSummary: permissionSummary(decoded.permissionSummary),
@@ -102,19 +103,30 @@ public enum HookInput {
         )
     }
 
-    public static func taskLabel(from payload: HookPayload?, source: String) -> String? {
+    public static func sessionTitle(from payload: HookPayload?, source: String) -> String? {
         let directoryName = payload?.cwd.flatMap { value -> String? in
             let name = URL(fileURLWithPath: value).lastPathComponent
             return name.isEmpty ? nil : name
         }
         let candidate = source == "claude"
-            ? (payload?.sessionTitle ?? payload?.agentType ?? directoryName ?? "Claude Code")
-            : (payload?.taskLabel ?? directoryName ?? "OpenCode")
+            ? (payload?.sessionTitle ?? directoryName ?? "Claude Code")
+            : (payload?.sessionTitle ?? directoryName ?? "OpenCode")
         return normalizedLabel(candidate)
     }
 
     public static func subagentLabel(from payload: HookPayload?) -> String {
         normalizedLabel(payload?.agentType) ?? "Subagent"
+    }
+
+    public static func activityDescription(from payload: HookPayload?, source: String) -> String? {
+        source == "claude" ? payload?.claudeToolActivityDescription : payload?.activityDescription
+    }
+
+    private static func claudeToolActivityDescription(from payload: BasicPayload) -> String? {
+        guard let toolName = payload.toolName?.lowercased(), ["bash", "agent", "task"].contains(toolName) else {
+            return nil
+        }
+        return boundedLabel(payload.toolInput?.description)
     }
 
     private static func bounded(_ value: String?, bytes maximum: Int) -> String? {
@@ -172,7 +184,8 @@ public struct HookPayload: Equatable, Sendable {
     public let cwd: String?
     public let sessionTitle: String?
     public let agentType: String?
-    public let taskLabel: String?
+    public let activityDescription: String?
+    public let claudeToolActivityDescription: String?
     public let agentID: String?
     public let parentSessionID: String?
     public let permissionSummary: String?
@@ -190,7 +203,9 @@ private struct BasicPayload: Decodable {
     let cwd: String?
     let sessionTitle: String?
     let agentType: String?
-    let taskLabel: String?
+    let activityDescription: String?
+    let toolName: String?
+    let toolInput: ToolInput?
     let agentID: String?
     let parentSessionID: String?
     let permissionSummary: String?
@@ -207,7 +222,9 @@ private struct BasicPayload: Decodable {
         case cwd
         case sessionTitle = "session_title"
         case agentType = "agent_type"
-        case taskLabel = "task_label"
+        case activityDescription = "activity_description"
+        case toolName = "tool_name"
+        case toolInput = "tool_input"
         case agentID = "agent_id"
         case parentSessionID = "parent_session_id"
         case permissionSummary = "permission_summary"
@@ -218,6 +235,10 @@ private struct BasicPayload: Decodable {
         case requestState = "request_state"
         case costUSD = "cost_usd"
         case costGeneration = "cost_generation"
+    }
+
+    struct ToolInput: Decodable {
+        let description: String?
     }
 }
 

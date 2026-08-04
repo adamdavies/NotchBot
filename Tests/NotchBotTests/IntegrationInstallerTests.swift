@@ -42,7 +42,7 @@ import Testing
     ).write(to: fixture.pluginURL, atomically: true, encoding: .utf8)
     let previousHelperMarker = try #require(NotchBotIntegrationFiles.previousHelperOwnershipMarkers.first)
     try previousHelperMarker.write(to: fixture.helperOwnershipURL, atomically: true, encoding: .utf8)
-    let previousStatus = "{\"version\":17,\"installedAt\":0}"
+    let previousStatus = "{\"version\":18,\"installedAt\":0}"
     try Data(previousStatus.utf8).write(to: fixture.installStatusURL)
 
     let updater = fixture.installer()
@@ -55,7 +55,7 @@ import Testing
     #expect(try String(contentsOf: fixture.helperOwnershipURL, encoding: .utf8)
         == NotchBotIntegrationFiles.helperOwnershipMarker)
     let status = try JSONDecoder().decode(IntegrationInstallStatus.self, from: Data(contentsOf: fixture.installStatusURL))
-    #expect(status.version == 18)
+    #expect(status.version == 19)
 }
 
 @MainActor

@@ -82,6 +82,53 @@ private func decodeEvent(_ data: Data) throws -> AgentEvent {
     #expect(event.workingDirectory == "/tmp/project")
     #expect(event.terminalBundleIdentifier == "com.googlecode.iterm2")
     #expect(event.permission == nil)
+    #expect(event.sessionTitle == nil)
+    #expect(event.activityDescription == nil)
+}
+
+@Test func claudeEventSeparatesStableSessionAndSubagentTitlesFromActivity() throws {
+    let parentRecorder = Recorder()
+    let parentPayload = Data("""
+    {"session_id":"parent","session_title":"Feature work","agent_type":"ignored","tool_name":"BASH","tool_input":{"description":"Run tests","command":"private"}}
+    """.utf8)
+    _ = HookRunner.run(
+        arguments: ["--source", "claude", "--kind", "working"],
+        environment: [:],
+        services: services(input: parentPayload, recorder: parentRecorder)
+    )
+    let parent = try decodeEvent(#require(parentRecorder.sent.first))
+    #expect(parent.sessionTitle == "Feature work")
+    #expect(parent.activityDescription == "Run tests")
+
+    let childRecorder = Recorder()
+    let childPayload = Data("""
+    {"session_id":"parent","agent_id":"child","session_title":"Feature work","agent_type":"Explore","tool_name":"Task","tool_input":{"description":"Inspect API"}}
+    """.utf8)
+    _ = HookRunner.run(
+        arguments: ["--source", "claude", "--kind", "working"],
+        environment: [:],
+        services: services(input: childPayload, recorder: childRecorder)
+    )
+    let child = try decodeEvent(#require(childRecorder.sent.first))
+    #expect(child.sessionID == "child")
+    #expect(child.parentSessionID == "parent")
+    #expect(child.sessionTitle == "Explore")
+    #expect(child.activityDescription == "Inspect API")
+}
+
+@Test func openCodeEventCarriesSessionTitleAndActivitySeparately() throws {
+    let recorder = Recorder()
+    let payload = Data("""
+    {"session_id":"session","session_title":"Project","activity_description":"Run tests"}
+    """.utf8)
+    _ = HookRunner.run(
+        arguments: ["--source", "opencode", "--kind", "working"],
+        environment: [:],
+        services: services(input: payload, recorder: recorder)
+    )
+    let event = try decodeEvent(#require(recorder.sent.first))
+    #expect(event.sessionTitle == "Project")
+    #expect(event.activityDescription == "Run tests")
 }
 
 @Test func transportFailureStillExitsZeroSoProviderHooksNeverFail() {

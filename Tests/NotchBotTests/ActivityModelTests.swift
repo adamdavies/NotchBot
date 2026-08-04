@@ -57,13 +57,13 @@ private actor ControlledSleeper {
         sessionID: "session",
         timestamp: fixture.clock.now,
         workingDirectory: "/tmp/project",
-        taskLabel: "Build app"
+        activityDescription: "Build app"
     ))
 
     #expect(fixture.model.robotState == .working)
     #expect(fixture.model.primarySession?.sessionID == "session")
     #expect(fixture.model.primarySession?.workingDirectory == "/tmp/project")
-    #expect(fixture.model.primarySession?.taskLabel == "Build app")
+    #expect(fixture.model.primarySession?.activityDescription == "Build app")
     #expect(fixture.model.activeAgentCount == 1)
     #expect(fixture.model.waitingAgentCount == 0)
     #expect(fixture.model.activeSessions.count == 1)
