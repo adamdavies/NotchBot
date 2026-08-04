@@ -178,6 +178,26 @@ private actor ControlledSleeper {
     #expect(fixture.defaults.double(forKey: DailyCostPreference.totalKey) == 0.25)
 }
 
+@Test @MainActor func persistedCapProgressResetsToBaseAcrossDayRollover() throws {
+    let fixture = try makeModelFixture(initialCompletionCount: 150)
+    defer { fixture.cleanup() }
+
+    #expect(fixture.model.dailyCompletionCount == 150)
+    #expect(fixture.model.coolnessTier == .cap)
+
+    fixture.clock.now = fixture.clock.now.addingTimeInterval(24 * 60 * 60)
+    fixture.model.receive(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "session",
+        timestamp: fixture.clock.now
+    ))
+
+    #expect(fixture.model.dailyCompletionCount == 0)
+    #expect(fixture.model.coolnessTier == .base)
+    #expect(fixture.defaults.integer(forKey: DailyCoolnessPreference.countKey) == 0)
+}
+
 @Test @MainActor func canceledExpiryCannotOverrideReplacementAttention() async throws {
     let sleeper = ControlledSleeper()
     let fixture = try makeModelFixture(sleep: { try await sleeper.sleep($0) })
@@ -257,7 +277,8 @@ private actor ControlledSleeper {
 
 @MainActor
 private func makeModelFixture(
-    sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
+    sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+    initialCompletionCount: Int? = nil
 ) throws -> ModelFixture {
     let suiteName = "ActivityModelTests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -268,6 +289,14 @@ private func makeModelFixture(
         year: 2026, month: 7, day: 1, hour: 12
     )))
     let clock = TestDateProvider(date)
+    if let initialCompletionCount {
+        DailyCoolnessPreference.save(
+            completionCount: initialCompletionCount,
+            to: defaults,
+            now: date,
+            calendar: calendar
+        )
+    }
     let notifications = NotificationRecorder()
     let model = ActivityModel(
         defaults: defaults,

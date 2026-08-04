@@ -139,7 +139,9 @@ final class ActivityModel: ObservableObject {
     }
 
     var queueCoolnessProgressText: String {
-        guard coolnessTier != .crown else { return "Max level" }
+        guard CoolnessTier.allCases.contains(where: { $0.threshold > dailyCompletionCount }) else {
+            return "Max level"
+        }
         return "\(Int((queueCoolnessProgress * 100).rounded()))%"
     }
 
