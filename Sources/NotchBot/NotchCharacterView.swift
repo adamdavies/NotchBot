@@ -16,6 +16,7 @@ struct NotchCharacterView: View {
 
             ZStack {
                 characterBody
+                    .scaleEffect(x: retroBodyScale.width, y: retroBodyScale.height)
                 CharacterAccessoryView(
                     tier: coolnessTier,
                     character: character,
@@ -46,6 +47,12 @@ struct NotchCharacterView: View {
 
     private var phase: Double {
         date.timeIntervalSinceReferenceDate
+    }
+
+    private var retroBodyScale: CGSize {
+        character == .retro && state == .attention
+            ? CGSize(width: 0.9, height: 1)
+            : CGSize(width: 1, height: 1)
     }
 
     private var characterScale: CGSize {
@@ -100,10 +107,14 @@ private struct CharacterAccessoryView: View {
                     .offset(shadesOffset)
             }
 
-            if tier >= .crown {
+            if tier == .crown {
                 NeonCrown()
                     .rotationEffect(.degrees(-20))
                     .offset(crownOffset)
+            } else if tier == .cap {
+                TechBroCap()
+                    .rotationEffect(.degrees(-6))
+                    .offset(capOffset)
             }
         }
         .allowsHitTesting(false)
@@ -132,6 +143,17 @@ private struct CharacterAccessoryView: View {
         case (.orb, _): CGSize(width: -4, height: -11)
         case (.cat, .idle): CGSize(width: -5, height: -11)
         case (.cat, .working): CGSize(width: -4, height: -11)
+        }
+    }
+
+    private var capOffset: CGSize {
+        switch (character, state) {
+        case (.retro, .attention): CGSize(width: -1, height: -8)
+        case (.blob, .attention), (.orb, .attention): CGSize(width: -1, height: -9)
+        case (.cat, .attention): CGSize(width: -1, height: -10)
+        case (.retro, _), (.blob, _), (.orb, _): CGSize(width: -1, height: -10)
+        case (.cat, .idle): CGSize(width: -2, height: -10)
+        case (.cat, .working): CGSize(width: -1, height: -11)
         }
     }
 }
@@ -238,6 +260,55 @@ private struct NeonCrown: View {
             .overlay {
                 CrownShape().stroke(.black.opacity(0.9), lineWidth: 1.4)
             }
+    }
+}
+
+private struct TechBroCap: View {
+    private let capColor = Color(red: 0.08, green: 0.3, blue: 0.78)
+    private let accentColor = Color(red: 1, green: 0.72, blue: 0.04)
+
+    var body: some View {
+        ZStack {
+            CapCrownShape()
+                .fill(capColor)
+                .frame(width: 16, height: 10)
+                .overlay {
+                    CapCrownShape().stroke(accentColor, lineWidth: 1.3)
+                }
+
+            Capsule()
+                .fill(capColor)
+                .frame(width: 11, height: 3)
+                .overlay {
+                    Capsule().stroke(accentColor, lineWidth: 1)
+                }
+                .offset(x: 7, y: 3.5)
+
+            Circle()
+                .fill(accentColor)
+                .frame(width: 3, height: 3)
+                .offset(y: -1.5)
+        }
+        .frame(width: 22, height: 11)
+    }
+}
+
+private struct CapCrownShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + 1, y: rect.midY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.midX, y: rect.minY),
+            control: CGPoint(x: rect.minX + rect.width * 0.2, y: rect.minY)
+        )
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - 1, y: rect.midY),
+            control: CGPoint(x: rect.maxX - rect.width * 0.2, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.closeSubpath()
+        return path
     }
 }
 

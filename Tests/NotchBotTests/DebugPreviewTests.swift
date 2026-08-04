@@ -11,14 +11,14 @@ import Testing
     defer { model.shutdown() }
 
     model.setPreviewState(.working)
-    model.setPreviewCoolnessTier(.crown)
+    model.setPreviewCoolnessTier(.cap)
     #expect(model.displayedRobotState == .working)
-    #expect(model.displayedCoolnessTier == .crown)
+    #expect(model.displayedCoolnessTier == .cap)
     #expect(model.isPreviewing)
 
     model.setPreviewState(nil)
     #expect(model.displayedRobotState == model.robotState)
-    #expect(model.displayedCoolnessTier == .crown)
+    #expect(model.displayedCoolnessTier == .cap)
     #expect(model.isPreviewing)
 
     model.cancelPreview()
@@ -45,6 +45,32 @@ import Testing
     let crownModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)
     defer { crownModel.shutdown() }
     #expect(crownModel.coolnessTier == .crown)
-    #expect(crownModel.queueCoolnessProgress == 1)
-    #expect(crownModel.queueCoolnessProgressText == "Max level")
+    #expect(crownModel.queueCoolnessProgress == 0)
+    #expect(crownModel.queueCoolnessProgressText == "0%")
+    #expect(crownModel.coolnessStatusText == "100 completed runs · Crown · 50 to Cap")
+
+    DailyCoolnessPreference.save(completionCount: 125, to: defaults, now: now, calendar: calendar)
+    let midCrownModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)
+    defer { midCrownModel.shutdown() }
+    #expect(midCrownModel.coolnessTier == .crown)
+    #expect(midCrownModel.queueCoolnessProgress == 0.5)
+    #expect(midCrownModel.queueCoolnessProgressText == "50%")
+    #expect(midCrownModel.coolnessStatusText == "125 completed runs · Crown · 25 to Cap")
+
+    DailyCoolnessPreference.save(completionCount: 149, to: defaults, now: now, calendar: calendar)
+    let nearCapModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)
+    defer { nearCapModel.shutdown() }
+    #expect(nearCapModel.coolnessTier == .crown)
+    #expect(nearCapModel.queueCoolnessProgress == 0.98)
+    #expect(nearCapModel.queueCoolnessProgressText == "98%")
+    #expect(nearCapModel.coolnessStatusText == "149 completed runs · Crown · 1 to Cap")
+
+    DailyCoolnessPreference.save(completionCount: 150, to: defaults, now: now, calendar: calendar)
+    let capModel = ActivityModel(defaults: defaults, calendar: calendar, now: now)
+    defer { capModel.shutdown() }
+    #expect(capModel.dailyCompletionCount == 150)
+    #expect(capModel.coolnessTier == .cap)
+    #expect(capModel.queueCoolnessProgress == 1)
+    #expect(capModel.queueCoolnessProgressText == "Max level")
+    #expect(capModel.coolnessStatusText == "150 completed runs · Cap")
 }

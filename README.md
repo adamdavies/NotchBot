@@ -6,19 +6,19 @@
 
 NotchBot is a native macOS menu-bar companion for AI coding agents. It extends a MacBook notch with a pixel robot that sleeps with drifting Zs while idle, walks while an agent is working, and jumps with a yellow pulse when an agent needs attention.
 
-Version 0.6.0 supports OpenCode and Claude Code on Apple Silicon Macs running macOS 14 or later.
+Version 0.7.0 supports OpenCode and Claude Code on Apple Silicon Macs running macOS 14 or later.
 
 ## Install
 
-Download `NotchBot-0.6.0.dmg` and `NotchBot-0.6.0.dmg.sha256` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), verify the checksum, open the DMG, and move NotchBot into `/Applications`.
+Download `NotchBot-0.7.0.dmg` and `NotchBot-0.7.0.dmg.sha256` from the [latest GitHub release](https://github.com/adamdavies/NotchBot/releases/latest), verify the checksum, open the DMG, and move NotchBot into `/Applications`.
 
 ```sh
-shasum -a 256 -c NotchBot-0.6.0.dmg.sha256
+shasum -a 256 -c NotchBot-0.7.0.dmg.sha256
 ```
 
 Developer ID signing and notarization are preferred. When those credentials are unavailable, an explicitly produced ad-hoc release may require right-clicking NotchBot and selecting **Open**; the release notes identify that status.
 
-Open the fixed robot menu-bar icon and select **Install Integrations** for a first installation. After updating NotchBot, including to v0.6.0, select **Update Integrations** and restart all running OpenCode and Claude Code sessions so they load the current integration.
+Open the fixed robot menu-bar icon and select **Install Integrations** for a first installation. Version 0.7.0 retains integration revision 19 from v0.6.0, so existing v0.6.0 integrations do not need to be updated and running OpenCode and Claude Code sessions do not need to be restarted.
 
 ## Current Features
 
@@ -35,7 +35,7 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 - Permission rows separate the requested scope from bounded native command, path, or resource context and include **Allow Once**, **Always**, and **Decline** controls; Claude's **Always** control appears only for one unambiguous native suggestion
 - Clicking an attention row or the compact bot acknowledges its current attention state, stops the Needs You presentation, and focuses the terminal without submitting or hiding any unresolved request
 - A duplicate event for an acknowledged request stays quiet, while a new request restores Needs You; after a permission response is submitted, its controls disappear until the provider reports resolution
-- Daily coolness tiers at 25, 50, and 100 observed top-level completions add a cumulative cyan isometric glow plate, neon shades, and a gold crown, resetting at local midnight
+- Daily coolness tiers at 25, 50, 100, and 150 observed top-level completions add a cumulative cyan isometric glow plate and neon shades, followed by a gold crown and then a large blue-and-gold tech-bro cap; Cap replaces the crown and progression resets at local midnight
 - Optional local estimated spend tracking for OpenCode and Claude Code, with per-session estimates and a daily total that resets at local midnight
 - When no sessions are tracked, idle hover shows an empty queue state instead of retaining completed response text
 - Separate bounded session-title and current-activity lines, with provider/project/status details retained beneath them
@@ -48,7 +48,7 @@ Open the fixed robot menu-bar icon and select **Install Integrations** for a fir
 swift run NotchBot
 ```
 
-Open the menu-bar robot and select **Install Integrations** for a first installation. Select **Update Integrations** after updating the app, then restart all running agent sessions.
+Open the menu-bar robot and select **Install Integrations** for a first installation. Select **Update Integrations** and restart running agent sessions only when the app reports that an integration update is available.
 
 Use the **Debug** menu to independently preview robot states and coolness tiers without running an agent. Debug previews remain active until stopped and never change persisted daily progress.
 
@@ -165,7 +165,7 @@ NOTARIZE=1 NOTARY_PROFILE="notchbot-notary" scripts/create-dmg.sh
 
 ## Integration Files
 
-NotchBot's v0.6.0 integration and local transport use these paths:
+NotchBot integration revision 19 and its local transport use these paths:
 
 - `~/Library/Application Support/NotchBot/bin/notchbot-hook`
 - `~/Library/Application Support/NotchBot/bin/notchbot-hook.notchbot-owner`
@@ -181,7 +181,7 @@ NotchBot's v0.6.0 integration and local transport use these paths:
 
 Before changing Claude Code settings, NotchBot creates a mode-`0600` transactional backup under `~/Library/Application Support/NotchBot/integration-backups/`. Managed files are staged in the destination directory with restrictive permissions applied before atomic rename. NotchBot removes a backup after verifying a successful update and retains at most the five newest recognized backups after failures; unrelated files, directories, and symlinks are not pruned. Backups support manual recovery and are not restored automatically. When cost tracking is enabled, NotchBot stores the complete prior status-line configuration, preserves its options and output, and restores it when tracking is disabled. If that recovery state is missing or invalid, disabling tracking stops without changing Claude settings. Removal verifies all generated markers and managed configuration before changing settings or deleting files. These checks reduce accidental replacement but cannot protect against a malicious process running as the same user. A legacy `~/.claude/settings.json.notchbot-backup` created by v0.1.0 is left untouched and can be reviewed or removed manually after migration.
 
-Integration revision 19 requires selecting **Update Integrations** after installing the updated app, then restarting all running Claude Code and OpenCode sessions.
+Version 0.7.0 retains integration revision 19 and event protocol version 4. Existing v0.6.0 integrations remain current, so this release does not require selecting **Update Integrations** or restarting Claude Code and OpenCode sessions.
 
 ## Privacy
 
@@ -193,7 +193,7 @@ Claude Code supplies its hook JSON, and while cost tracking is enabled its docum
 
 The socket is readable and writable only by the current macOS user. This protects against other local user accounts, not other processes running as the same user: a same-user process can inspect integration files or forge local events. See [SECURITY.md](SECURITY.md) for the full threat model.
 
-NotchBot 0.6.0 is not App Sandbox enabled and requests no signing entitlements.
+NotchBot 0.7.0 is not App Sandbox enabled and requests no signing entitlements.
 
 ## License
 

@@ -5,6 +5,7 @@ public enum CoolnessTier: Int, CaseIterable, Comparable, Identifiable, Sendable 
     case glow
     case shades
     case crown
+    case cap
 
     public var id: Int { rawValue }
 
@@ -14,6 +15,7 @@ public enum CoolnessTier: Int, CaseIterable, Comparable, Identifiable, Sendable 
 
     public init(completionCount: Int) {
         self = switch completionCount {
+        case 150...: .cap
         case 100...: .crown
         case 50...: .shades
         case 25...: .glow
@@ -27,6 +29,7 @@ public enum CoolnessTier: Int, CaseIterable, Comparable, Identifiable, Sendable 
         case .glow: "Glow"
         case .shades: "Shades"
         case .crown: "Crown"
+        case .cap: "Cap"
         }
     }
 
@@ -36,6 +39,7 @@ public enum CoolnessTier: Int, CaseIterable, Comparable, Identifiable, Sendable 
         case .glow: 25
         case .shades: 50
         case .crown: 100
+        case .cap: 150
         }
     }
 }

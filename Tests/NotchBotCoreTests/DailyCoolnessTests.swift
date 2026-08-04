@@ -10,6 +10,12 @@ import Testing
     #expect(CoolnessTier(completionCount: 50) == .shades)
     #expect(CoolnessTier(completionCount: 99) == .shades)
     #expect(CoolnessTier(completionCount: 100) == .crown)
+    #expect(CoolnessTier(completionCount: 149) == .crown)
+    #expect(CoolnessTier(completionCount: 150) == .cap)
+    #expect(CoolnessTier(completionCount: 1_000) == .cap)
+    #expect(CoolnessTier.cap.displayName == "Cap")
+    #expect(CoolnessTier.cap.threshold == 150)
+    #expect(CoolnessTier.allCases == [.base, .glow, .shades, .crown, .cap])
 }
 
 @Test func dailyCoolnessCountsEachTopLevelWorkCycleOnce() {
