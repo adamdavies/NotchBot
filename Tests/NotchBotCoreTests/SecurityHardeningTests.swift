@@ -33,13 +33,13 @@ import Testing
     }
 }
 
-@Test func eventValidationRejectsDecodedOversizedTaskLabels() throws {
-    let valid = AgentEvent(source: .claude, kind: .metadata, sessionID: "session", taskLabel: "Task")
+@Test func eventValidationRejectsDecodedOversizedActivityDescriptions() throws {
+    let valid = AgentEvent(source: .claude, kind: .metadata, sessionID: "session", activityDescription: "Task")
     var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(valid)) as! [String: Any]
-    json["taskLabel"] = String(repeating: "x", count: 101)
+    json["activityDescription"] = String(repeating: "x", count: 101)
     let decoded = try JSONDecoder().decode(AgentEvent.self, from: JSONSerialization.data(withJSONObject: json))
 
-    #expect(throws: AgentEventValidationError.stringTooLong("taskLabel")) {
+    #expect(throws: AgentEventValidationError.stringTooLong("activityDescription")) {
         try AgentEventValidator.validate(decoded)
     }
 }

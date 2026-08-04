@@ -131,7 +131,9 @@ import Testing
       "session_title":"  Session   title  ",
       "task_subject":"Task subject",
       "agent_type":"Explore",
-      "task_label":"OpenCode title",
+      "activity_description":"OpenCode activity",
+      "tool_name":"Bash",
+      "tool_input":{"description":"  Run   focused tests  ","command":"private command"},
       "prompt":"private prompt",
       "task_description":"private description",
       "transcript":"private transcript"
@@ -141,19 +143,51 @@ import Testing
 
     #expect(payload?.sessionTitle == "Session title")
     #expect(payload?.agentType == "Explore")
-    #expect(HookInput.taskLabel(from: payload, source: "claude") == "Session title")
-    #expect(HookInput.taskLabel(from: payload, source: "opencode") == "OpenCode title")
+    #expect(HookInput.sessionTitle(from: payload, source: "claude") == "Session title")
+    #expect(HookInput.sessionTitle(from: payload, source: "opencode") == "Session title")
+    #expect(HookInput.activityDescription(from: payload, source: "claude") == "Run focused tests")
+    #expect(HookInput.activityDescription(from: payload, source: "opencode") == "OpenCode activity")
 }
 
-@Test func taskLabelFallbacksAreBoundedAndIgnoreResponseText() throws {
+@Test func sessionTitleFallbacksAreBoundedAndIgnoreResponseText() throws {
     let data = Data("""
     {"cwd":"/tmp/project","last_assistant_message":"private result","prompt":"private prompt"}
     """.utf8)
     let payload = try HookInput.decodePayload(from: data)
 
-    #expect(HookInput.taskLabel(from: payload, source: "claude") == "project")
-    #expect(HookInput.taskLabel(from: nil, source: "claude") == "Claude Code")
-    #expect(HookInput.taskLabel(from: nil, source: "opencode") == "OpenCode")
+    #expect(HookInput.sessionTitle(from: payload, source: "claude") == "project")
+    #expect(HookInput.sessionTitle(from: nil, source: "claude") == "Claude Code")
+    #expect(HookInput.sessionTitle(from: nil, source: "opencode") == "OpenCode")
+}
+
+@Test func claudeActivityUsesOnlyDescriptionsFromDocumentedTools() throws {
+    for toolName in ["Bash", "agent", "TASK"] {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "tool_name": toolName,
+            "tool_input": [
+                "description": "  Check   the build  ",
+                "command": "private command",
+                "prompt": "private prompt",
+            ],
+            "activity_description": "must not be used for Claude",
+        ])
+        let payload = try HookInput.decodePayload(from: data)
+        #expect(HookInput.activityDescription(from: payload, source: "claude") == "Check the build")
+    }
+
+    for toolName in ["Read", "Edit", "WebFetch"] {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "tool_name": toolName,
+            "tool_input": ["description": "Do not collect"],
+        ])
+        let payload = try HookInput.decodePayload(from: data)
+        #expect(HookInput.activityDescription(from: payload, source: "claude") == nil)
+    }
+
+    let rawFields = try HookInput.decodePayload(from: Data("""
+    {"tool_name":"Bash","tool_input":{"command":"secret"},"prompt":"secret","task_description":"secret"}
+    """.utf8))
+    #expect(HookInput.activityDescription(from: rawFields, source: "claude") == nil)
 }
 
 @Test func subagentIdentifiersAreAllowlistedAndValidated() throws {

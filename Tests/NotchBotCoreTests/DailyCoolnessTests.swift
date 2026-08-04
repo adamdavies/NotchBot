@@ -153,7 +153,7 @@ import Testing
         kind: .metadata,
         sessionID: "child",
         parentSessionID: "parent",
-        taskLabel: "Child"
+        activityDescription: "Child"
     ))
     let completion = AgentEvent(
         source: .opencode,

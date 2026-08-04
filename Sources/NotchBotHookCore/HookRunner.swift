@@ -159,13 +159,14 @@ public enum HookRunner {
         } else {
             nil
         }
-        let taskLabel: String? = if isClaudeSubagent {
+        let sessionTitle: String? = if isClaudeSubagent {
             HookInput.subagentLabel(from: payload)
-        } else if source == .claude && kind != .metadata {
-            nil
+        } else if source == .claude {
+            payload?.sessionTitle
         } else {
-            HookInput.taskLabel(from: payload, source: options.source)
+            HookInput.sessionTitle(from: payload, source: options.source)
         }
+        let activityDescription = HookInput.activityDescription(from: payload, source: options.source)
         let request: AgentRequestUpdate? = if source == .opencode,
             let requestID = payload?.requestID,
             let requestKind = payload?.requestKind.flatMap(AgentRequestKind.init(rawValue:)),
@@ -184,7 +185,8 @@ public enum HookRunner {
             terminalProcessID: nil,
             reason: options.reason,
             expiresAfter: options.expiresAfter,
-            taskLabel: taskLabel,
+            sessionTitle: sessionTitle,
+            activityDescription: activityDescription,
             permission: permission,
             request: request,
             costUSD: payload?.costUSD,

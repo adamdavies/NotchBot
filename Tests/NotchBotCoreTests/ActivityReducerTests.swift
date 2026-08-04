@@ -123,17 +123,17 @@ import Testing
         kind: .working,
         sessionID: "shared",
         timestamp: start,
-        taskLabel: "Claude task"
+        activityDescription: "Claude task"
     ))
     reducer.apply(AgentEvent(
         source: .opencode,
         kind: .attention,
         sessionID: "shared",
         timestamp: start.addingTimeInterval(1),
-        taskLabel: "OpenCode task"
+        activityDescription: "OpenCode task"
     ))
 
-    #expect(reducer.activities.map(\.taskLabel) == ["OpenCode task", "Claude task"])
+    #expect(reducer.activities.map(\.activityDescription) == ["OpenCode task", "Claude task"])
     #expect(Set(reducer.activities.map(\.key)).count == 2)
 }
 
@@ -154,7 +154,7 @@ import Testing
         kind: .metadata,
         sessionID: "one",
         timestamp: start.addingTimeInterval(2),
-        taskLabel: "Task"
+        activityDescription: "Task"
     ))
     reducer.apply(AgentEvent(
         source: .claude,
@@ -164,7 +164,7 @@ import Testing
     ))
 
     #expect(reducer.sessionCount == 1)
-    #expect(reducer.primarySession?.taskLabel == "Task")
+    #expect(reducer.primarySession?.activityDescription == "Task")
 }
 
 @Test func unchangedAttentionCanExpireWithoutClearingNewWork() {
@@ -646,20 +646,20 @@ import Testing
     #expect(reducer.primarySession?.pendingRequestCount == 2)
 }
 
-@Test func taskLabelsAreNormalizedAndBounded() {
+@Test func presentationTextIsNormalizedAndBounded() {
     let event = AgentEvent(
         source: .claude,
         kind: .metadata,
         sessionID: "one",
-        taskLabel: "  Review\n  " + String(repeating: "x", count: 200)
+        activityDescription: "  Review\n  " + String(repeating: "x", count: 200)
     )
-    let byteHeavy = AgentTaskLabel.normalized(String(repeating: "e\u{301}", count: 100))
+    let byteHeavy = AgentPresentationText.normalized(String(repeating: "e\u{301}", count: 100))
 
-    #expect(event.taskLabel?.hasPrefix("Review ") == true)
-    #expect(event.taskLabel?.count == AgentTaskLabel.maximumCharacters)
-    #expect(byteHeavy?.utf8.count ?? 0 <= AgentTaskLabel.maximumBytes)
-    #expect(AgentTaskLabel.normalized(" \n\t ") == nil)
-    #expect(AgentTaskLabel.normalized("safe\u{202e}evil") == "safeevil")
+    #expect(event.activityDescription?.hasPrefix("Review ") == true)
+    #expect(event.activityDescription?.count == AgentPresentationText.maximumCharacters)
+    #expect(byteHeavy?.utf8.count ?? 0 <= AgentPresentationText.maximumBytes)
+    #expect(AgentPresentationText.normalized(" \n\t ") == nil)
+    #expect(AgentPresentationText.normalized("safe\u{202e}evil") == "safeevil")
 }
 
 @Test func metadataDoesNotActivateOrNotifyAndMergesIntoActivity() {
@@ -670,7 +670,7 @@ import Testing
         kind: .metadata,
         sessionID: "one",
         timestamp: start,
-        taskLabel: "First title"
+        sessionTitle: "First title"
     ))
 
     #expect(metadata.state == .idle)
@@ -689,7 +689,7 @@ import Testing
         kind: .metadata,
         sessionID: "one",
         timestamp: start.addingTimeInterval(2),
-        taskLabel: "Latest title"
+        sessionTitle: "Latest title"
     ))
     reducer.apply(AgentEvent(
         source: .opencode,
@@ -698,11 +698,11 @@ import Testing
         timestamp: start.addingTimeInterval(3)
     ))
 
-    #expect(reducer.primarySession?.taskLabel == "Latest title")
+    #expect(reducer.primarySession?.sessionTitle == "Latest title")
     #expect(reducer.pendingMetadataCount == 0)
 }
 
-@Test func latestExplicitClaudeMetadataBecomesTheVisibleTaskLabel() {
+@Test func claudeSessionTitleAndCurrentActivityRemainSeparate() {
     let start = Date(timeIntervalSince1970: 100)
     var reducer = ActivityReducer()
     reducer.apply(AgentEvent(
@@ -710,14 +710,14 @@ import Testing
         kind: .metadata,
         sessionID: "one",
         timestamp: start,
-        taskLabel: "Named session"
+        sessionTitle: "Named session"
     ))
     reducer.apply(AgentEvent(
         source: .claude,
         kind: .metadata,
         sessionID: "one",
         timestamp: start.addingTimeInterval(1),
-        taskLabel: "Current task"
+        activityDescription: "Current task"
     ))
     reducer.apply(AgentEvent(
         source: .claude,
@@ -726,13 +726,93 @@ import Testing
         timestamp: start.addingTimeInterval(2)
     ))
 
-    #expect(reducer.primarySession?.taskLabel == "Current task")
+    #expect(reducer.primarySession?.sessionTitle == "Named session")
+    #expect(reducer.primarySession?.activityDescription == "Current task")
+}
+
+@Test func activityUpdatesAreNonEmptyRetainedAndOrderedForBothProviders() {
+    for source in [AgentSource.claude, .opencode] {
+        let start = Date(timeIntervalSince1970: 100)
+        var reducer = ActivityReducer()
+        reducer.apply(AgentEvent(
+            source: source,
+            kind: .working,
+            sessionID: "one",
+            timestamp: start,
+            sessionTitle: "Stable session",
+            activityDescription: "First activity"
+        ))
+        reducer.apply(AgentEvent(
+            source: source,
+            kind: .working,
+            sessionID: "one",
+            timestamp: start.addingTimeInterval(1)
+        ))
+        reducer.apply(AgentEvent(
+            source: source,
+            kind: .metadata,
+            sessionID: "one",
+            timestamp: start.addingTimeInterval(3),
+            activityDescription: "Newest activity"
+        ))
+        reducer.apply(AgentEvent(
+            source: source,
+            kind: .working,
+            sessionID: "one",
+            timestamp: start.addingTimeInterval(2),
+            activityDescription: "Delayed activity"
+        ))
+        reducer.apply(AgentEvent(
+            source: source,
+            kind: .metadata,
+            sessionID: "one",
+            timestamp: start.addingTimeInterval(4),
+            activityDescription: "  \n "
+        ))
+
+        #expect(reducer.primarySession?.sessionTitle == "Stable session")
+        #expect(reducer.primarySession?.activityDescription == "Newest activity")
+    }
+}
+
+@Test func parentAndSubagentActivityUpdateIndependentlyForBothProviders() {
+    for source in [AgentSource.claude, .opencode] {
+        let start = Date(timeIntervalSince1970: 100)
+        var reducer = ActivityReducer()
+        reducer.apply(AgentEvent(
+            source: source,
+            kind: .working,
+            sessionID: "parent",
+            timestamp: start,
+            activityDescription: "Parent first"
+        ))
+        reducer.apply(AgentEvent(
+            source: source,
+            kind: .working,
+            sessionID: "child",
+            parentSessionID: "parent",
+            timestamp: start.addingTimeInterval(1),
+            activityDescription: "Child first"
+        ))
+        reducer.apply(AgentEvent(
+            source: source,
+            kind: .metadata,
+            sessionID: "child",
+            parentSessionID: "parent",
+            timestamp: start.addingTimeInterval(2),
+            activityDescription: "Child latest"
+        ))
+
+        #expect(reducer.activities.map(\.sessionID) == ["parent", "child"])
+        #expect(reducer.activities[0].activityDescription == "Parent first")
+        #expect(reducer.activities[1].activityDescription == "Child latest")
+    }
 }
 
 @Test func pendingMetadataClearsExpiresAndIsCapped() {
     let start = Date(timeIntervalSince1970: 1_000)
     var reducer = ActivityReducer()
-    reducer.apply(AgentEvent(source: .claude, kind: .metadata, sessionID: "clear", timestamp: start, taskLabel: "Clear"))
+    reducer.apply(AgentEvent(source: .claude, kind: .metadata, sessionID: "clear", timestamp: start, sessionTitle: "Clear"))
     reducer.apply(AgentEvent(source: .claude, kind: .cleared, sessionID: "clear", timestamp: start.addingTimeInterval(1)))
     #expect(reducer.pendingMetadataCount == 0)
 
@@ -742,7 +822,7 @@ import Testing
             kind: .metadata,
             sessionID: "pending-\(index)",
             timestamp: start.addingTimeInterval(Double(index + 2)),
-            taskLabel: "Task \(index)"
+            sessionTitle: "Task \(index)"
         ))
     }
     #expect(reducer.pendingMetadataCount == ActivityReducer.maximumSessions)
@@ -759,7 +839,7 @@ import Testing
         kind: .working,
         sessionID: "parent",
         timestamp: start,
-        taskLabel: "Main task"
+        activityDescription: "Main task"
     ))
     let childAttention = reducer.apply(AgentEvent(
         source: .claude,
@@ -768,7 +848,7 @@ import Testing
         parentSessionID: "parent",
         timestamp: start.addingTimeInterval(1),
         reason: "Needs permission",
-        taskLabel: "Explore"
+        activityDescription: "Explore"
     ))
 
     #expect(reducer.activities.map(\.sessionID) == ["parent", "child"])
@@ -919,11 +999,11 @@ import Testing
         sessionID: "child",
         parentSessionID: "old-parent",
         timestamp: start.addingTimeInterval(5),
-        taskLabel: "Updated label"
+        activityDescription: "Updated label"
     ))
 
     #expect(reducer.primarySession?.parentSessionID == nil)
-    #expect(reducer.primarySession?.taskLabel == "Updated label")
+    #expect(reducer.primarySession?.activityDescription == "Updated label")
 }
 
 @Test func delayedParentMetadataRemovesChildThatPredatesParentClear() {
@@ -965,7 +1045,7 @@ import Testing
         sessionID: "child",
         parentSessionID: "parent",
         timestamp: start,
-        taskLabel: "Explore"
+        activityDescription: "Explore"
     ))
     reducer.apply(AgentEvent(
         source: .claude,

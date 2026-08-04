@@ -40,7 +40,8 @@ enum OpenCodePluginSource {
             null,
             directory,
             null,
-            taskLabels.get(sid) ?? fallbackTaskLabel,
+            sessionTitles.get(sid) ?? fallbackSessionTitle,
+            sessionActivities.get(sid),
             null,
             { costUSD: sessionCost },
           )
@@ -59,9 +60,13 @@ enum OpenCodePluginSource {
     static let template = """
     // {{MARKER}}. Do not edit.
     const hookPath = {{HOOK_PATH}}
-    const taskLabels = new Map()
+    const sessionTitles = new Map()
+    const sessionTitleTimestamps = new Map()
+    const sessionActivities = new Map()
+    const sessionActivityTimestamps = new Map()
     {{COST_STATE}}
     const sessionParents = new Map()
+    const deletedSessions = new Set()
     const completedSessions = new Set()
     const knownRequests = new Map()
     const resolvedRequests = new Map()
@@ -111,7 +116,7 @@ enum OpenCodePluginSource {
       return JSON.stringify([sessionID, kind, requestID])
     }
 
-    function taskLabel(value) {
+    function presentationText(value) {
       if (typeof value !== "string") return null
       const normalized = value.replace(/\\s+/g, " ").trim()
       if (!normalized || /^(New session|Child session)(?:\\s*-\\s*\\d{4}-\\d{2}-\\d{2}T[^ ]+)?$/i.test(normalized)) return null
@@ -123,6 +128,29 @@ enum OpenCodePluginSource {
         result = candidate
       }
       return result || null
+    }
+
+    function nativeTimestamp(value) {
+      if (typeof value === "number" && Number.isFinite(value)) return value
+      if (typeof value !== "string" || !value) return null
+      const parsed = Date.parse(value)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+
+    function cacheTimestamped(map, timestamps, sessionID, value, timestamp) {
+      value = presentationText(value)
+      timestamp = nativeTimestamp(timestamp)
+      if (!sessionID || !value) return false
+      const previousTimestamp = timestamps.get(sessionID)
+      if (map.has(sessionID) && (timestamp == null || (previousTimestamp != null && timestamp < previousTimestamp))) return false
+      if (!map.has(sessionID) && map.size >= 256) {
+        const oldestSessionID = map.keys().next().value
+        map.delete(oldestSessionID)
+        timestamps.delete(oldestSessionID)
+      }
+      map.set(sessionID, value)
+      if (timestamp != null) timestamps.set(sessionID, timestamp)
+      return true
     }
 
     function basename(value) {
@@ -176,7 +204,7 @@ enum OpenCodePluginSource {
       return patterns.some((pattern) => permissionText(pattern) === context) ? null : context
     }
 
-    function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, label, request, cost) {
+    function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, sessionTitle, activityDescription, request, cost) {
       sessionID = identifier(sessionID)
       if (!sessionID) return
       parentSessionID = identifier(parentSessionID)
@@ -188,7 +216,8 @@ enum OpenCodePluginSource {
         cwd: bounded(directory, 1024),
       }
       if (parentSessionID && parentSessionID !== sessionID) payload.parent_session_id = parentSessionID
-      if (label) payload.task_label = label
+      if (sessionTitle) payload.session_title = sessionTitle
+      if (activityDescription) payload.activity_description = activityDescription
       if (request) {
         payload.request_id = request.id
         payload.request_kind = request.kind
@@ -208,9 +237,18 @@ enum OpenCodePluginSource {
     }
 
     export const NotchBot = async ({ client, directory, worktree, project }) => {
-      const fallbackTaskLabel = taskLabel(project?.name) ?? taskLabel(basename(worktree)) ?? taskLabel(basename(directory)) ?? "OpenCode"
+      const fallbackSessionTitle = presentationText(project?.name) ?? presentationText(basename(worktree)) ?? presentationText(basename(directory)) ?? "OpenCode"
       const sendEvent = (kind, sessionID, reason, expiresAfter) =>
-        send(kind, sessionID, sessionParents.get(sessionID), reason, directory, expiresAfter, taskLabels.get(sessionID) ?? fallbackTaskLabel)
+        send(
+          kind,
+          sessionID,
+          sessionParents.get(sessionID),
+          reason,
+          directory,
+          expiresAfter,
+          sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+          sessionActivities.get(sessionID),
+        )
       const sendWorking = (sessionID) => {
         completedSessions.delete(sessionID)
         sendEvent("working", sessionID, null, null)
@@ -263,7 +301,8 @@ enum OpenCodePluginSource {
             null,
             directory,
             null,
-            taskLabels.get(sessionID) ?? fallbackTaskLabel,
+            sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+            sessionActivities.get(sessionID),
             { id: requestID, kind, state: "resolved" },
           )
         }
@@ -281,7 +320,8 @@ enum OpenCodePluginSource {
             "OpenCode needs your attention",
             directory,
             null,
-            taskLabels.get(sessionID) ?? fallbackTaskLabel,
+            sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+            sessionActivities.get(sessionID),
             { id: requestID, kind: "permission", state: "opened" },
           )
           return
@@ -291,7 +331,8 @@ enum OpenCodePluginSource {
           session_id: sessionID,
           parent_session_id: sessionParents.get(sessionID),
           cwd: bounded(directory, 1024),
-          task_label: taskLabels.get(sessionID) ?? fallbackTaskLabel,
+          session_title: sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+          activity_description: sessionActivities.get(sessionID),
           permission_summary: permissionSummary(properties),
           permission_context: permissionContext(properties),
           permission_can_always: true,
@@ -315,7 +356,8 @@ enum OpenCodePluginSource {
                 "OpenCode needs permission",
                 directory,
                 null,
-                taskLabels.get(sessionID) ?? fallbackTaskLabel,
+                sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+                sessionActivities.get(sessionID),
                 { id: requestID, kind: "permission", state: "opened" },
               )
             }
@@ -342,7 +384,8 @@ enum OpenCodePluginSource {
               "OpenCode needs permission",
               directory,
               null,
-              taskLabels.get(sessionID) ?? fallbackTaskLabel,
+              sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+              sessionActivities.get(sessionID),
               { id: requestID, kind: "permission", state: "opened" },
             )
           }
@@ -354,8 +397,46 @@ enum OpenCodePluginSource {
       event: async ({ event }) => {
         const properties = event.properties ?? {}
     {{COST_EVENT}}
-        const sessionID = identifier(properties.sessionID ?? properties.info?.id)
+        const sessionID = identifier(
+          event.type === "message.part.updated"
+            ? properties.part?.sessionID
+            : properties.sessionID ?? properties.info?.id
+        )
         if (!sessionID) return
+        if (event.type === "session.created") deletedSessions.delete(sessionID)
+        else if (deletedSessions.has(sessionID)) return
+
+        if (event.type === "message.part.updated") {
+          const part = properties.part
+          const partID = identifier(part?.id)
+          const stateTimestamp = properties.time?.updated
+            ?? properties.time?.end
+            ?? properties.time?.start
+            ?? properties.time
+            ?? part?.time?.updated
+            ?? part?.state?.time?.updated
+            ?? part?.state?.time?.end
+            ?? part?.state?.time?.start
+          if (partID && nativeTimestamp(stateTimestamp) != null && cacheTimestamped(
+            sessionActivities,
+            sessionActivityTimestamps,
+            sessionID,
+            part?.state?.title,
+            stateTimestamp,
+          )) {
+            send(
+              "metadata",
+              sessionID,
+              sessionParents.get(sessionID),
+              null,
+              directory,
+              null,
+              sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+              sessionActivities.get(sessionID),
+            )
+          }
+          return
+        }
 
         if (event.type === "permission.replied" || event.type === "permission.v2.replied") {
           resolveRequest(sessionID, "permission", nativeRequestID(properties))
@@ -363,8 +444,12 @@ enum OpenCodePluginSource {
         }
         if (event.type === "session.deleted") {
           setBounded(sessionGenerations, sessionID, {})
+          addBounded(deletedSessions, sessionID)
           sendEvent("cleared", sessionID, null, null)
-          taskLabels.delete(sessionID)
+          sessionTitles.delete(sessionID)
+          sessionTitleTimestamps.delete(sessionID)
+          sessionActivities.delete(sessionID)
+          sessionActivityTimestamps.delete(sessionID)
     {{COST_CLEANUP}}
           sessionParents.delete(sessionID)
           completedSessions.delete(sessionID)
@@ -393,18 +478,39 @@ enum OpenCodePluginSource {
         if (event.type === "session.created" || event.type === "session.updated") {
           const parentSessionID = identifier(properties.info?.parentID)
           setBounded(sessionParents, sessionID, parentSessionID && parentSessionID !== sessionID ? parentSessionID : null)
-          const label = taskLabel(properties.info?.title)
-          if (label) {
-            setBounded(taskLabels, sessionID, label)
-          }
-          send("metadata", sessionID, parentSessionID, null, directory, null, label)
+          cacheTimestamped(
+            sessionTitles,
+            sessionTitleTimestamps,
+            sessionID,
+            properties.info?.title,
+            properties.info?.time?.updated,
+          )
+          send(
+            "metadata",
+            sessionID,
+            parentSessionID,
+            null,
+            directory,
+            null,
+            sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+            sessionActivities.get(sessionID),
+          )
         }
         if (!sessionParents.has(sessionID)) {
           const parentResolution = resolveParentSessionID(sessionID, properties.info)
           if (immediateAttentionEvents.has(event.type)) {
             void parentResolution.then((parentSessionID) => {
               if (parentSessionID) {
-                send("metadata", sessionID, parentSessionID, null, directory, null, taskLabels.get(sessionID) ?? fallbackTaskLabel)
+                send(
+                  "metadata",
+                  sessionID,
+                  parentSessionID,
+                  null,
+                  directory,
+                  null,
+                  sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+                  sessionActivities.get(sessionID),
+                )
               }
             })
           } else {
@@ -467,7 +573,8 @@ enum OpenCodePluginSource {
               "OpenCode has a question",
               directory,
               null,
-              taskLabels.get(sessionID) ?? fallbackTaskLabel,
+              sessionTitles.get(sessionID) ?? fallbackSessionTitle,
+              sessionActivities.get(sessionID),
               { id: requestID, kind: "question", state: "opened" },
             )
             break
