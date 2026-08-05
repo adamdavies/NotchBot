@@ -45,6 +45,7 @@ final class IntegrationInstaller: ObservableObject {
     @Published private(set) var message = "Integrations not installed"
     @Published private(set) var launchesAtLogin = SMAppService.mainApp.status == .enabled
     @Published private(set) var requiresUpdate = false
+    @Published private(set) var isInstalled = false
     @Published private(set) var costTrackingEnabled: Bool
 
     private static let costTrackingKey = "costTrackingEnabled"
@@ -146,6 +147,7 @@ final class IntegrationInstaller: ObservableObject {
             message = "Integrations removed"
             costTrackingEnabled = false
             requiresUpdate = false
+            isInstalled = false
         } catch {
             message = "Removal failed: \(error.localizedDescription)"
         }
@@ -229,6 +231,7 @@ final class IntegrationInstaller: ObservableObject {
             try ownership.removeLegacyPrivacyPolicyIfOwned()
             message = "OpenCode and Claude Code connected"
             requiresUpdate = false
+            isInstalled = true
         } catch {
             message = "Installation failed: \(error.localizedDescription)"
         }
@@ -246,10 +249,12 @@ final class IntegrationInstaller: ObservableObject {
                 message = "Integration update required"
                 requiresUpdate = true
             }
+            isInstalled = false
             return
         }
         message = "Integration files installed"
         requiresUpdate = false
+        isInstalled = true
     }
 
     private func installHookExecutable(allowLegacyUpdate: Bool) throws -> URL {

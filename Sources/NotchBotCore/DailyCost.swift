@@ -47,16 +47,88 @@ public struct DailyCostTracker: Sendable {
     }
 }
 
+/// How today's estimated spend compares to the configured alert threshold.
+public enum DailyCostAlertLevel: String, Sendable, Equatable {
+    case normal
+    case warning
+    case exceeded
+}
+
+/// The user-configured daily spend threshold and its once-per-day fired flag. The flag lives beside
+/// the daily total so both reset on the same day boundary.
+public struct DailyCostAlert: Sendable, Equatable {
+    public static let maximumThreshold: Double = 100_000
+    public static let warningFraction: Double = 0.8
+
+    /// The configured threshold in USD. Zero means the alert is disabled.
+    public private(set) var threshold: Double
+    public private(set) var hasFired: Bool
+
+    public init(threshold: Double = 0, hasFired: Bool = false) {
+        self.threshold = Self.sanitize(threshold)
+        self.hasFired = self.threshold > 0 && hasFired
+    }
+
+    public var isEnabled: Bool { threshold > 0 }
+
+    public static func sanitize(_ value: Double) -> Double {
+        guard value.isFinite, value > 0 else { return 0 }
+        return (min(value, maximumThreshold) * 100).rounded() / 100
+    }
+
+    /// Parses a plain user-entered currency amount. Empty, unparseable, or non-positive input
+    /// disables the alert.
+    public static func parseThreshold(_ text: String, locale: Locale = .current) -> Double {
+        let cleaned = text.filter { $0.isNumber || $0 == "." || $0 == "," }
+        guard !cleaned.isEmpty else { return 0 }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = locale
+        if let number = formatter.number(from: cleaned) {
+            return sanitize(number.doubleValue)
+        }
+        return sanitize(Double(cleaned.replacingOccurrences(of: ",", with: "")) ?? 0)
+    }
+
+    /// Returns `true` exactly once per day, on the update that takes `total` across the threshold.
+    @discardableResult
+    public mutating func evaluate(total: Double) -> Bool {
+        guard threshold > 0, !hasFired, total.isFinite, total >= threshold else { return false }
+        hasFired = true
+        return true
+    }
+
+    /// Arms the alert only when the new threshold is genuinely above the current total, so lowering
+    /// it below an already-exceeded total cannot fire retroactively.
+    public mutating func setThreshold(_ value: Double, currentTotal: Double) {
+        threshold = Self.sanitize(value)
+        hasFired = threshold > 0 && currentTotal.isFinite && currentTotal >= threshold
+    }
+
+    public mutating func beginNewDay() {
+        hasFired = false
+    }
+
+    public func level(total: Double) -> DailyCostAlertLevel {
+        guard threshold > 0, total.isFinite, total > 0 else { return .normal }
+        if total >= threshold { return .exceeded }
+        if total >= threshold * Self.warningFraction { return .warning }
+        return .normal
+    }
+}
+
 public enum DailyCostPreference {
     public static let dayKey = "dailyCostDay"
     public static let totalKey = "dailyCostTotal"
     public static let sessionsKey = "dailyCostSessions"
+    public static let alertThresholdKey = "dailyCostAlertThreshold"
+    public static let alertFiredKey = "dailyCostAlertFired"
 
     public static func load(
         from defaults: UserDefaults,
         now: Date,
         calendar: Calendar
-    ) -> (totalCost: Double, sessionCosts: [String: Double]) {
+    ) -> (totalCost: Double, sessionCosts: [String: Double], alertFired: Bool) {
         let sessions: [String: Double]
         if let data = defaults.data(forKey: sessionsKey),
            let decoded = try? JSONDecoder().decode([String: Double].self, from: data) {
@@ -66,32 +138,45 @@ public enum DailyCostPreference {
         }
         guard defaults.string(forKey: dayKey)
             == DailyCoolnessPreference.dayIdentifier(for: now, calendar: calendar) else {
-            return (0, sessions)
+            return (0, sessions, false)
         }
         let total = defaults.double(forKey: totalKey)
-        guard total.isFinite, total >= 0 else { return (0, sessions) }
-        return (total, sessions)
+        guard total.isFinite, total >= 0 else { return (0, sessions, false) }
+        return (total, sessions, defaults.bool(forKey: alertFiredKey))
     }
 
     public static func save(
         totalCost: Double,
         sessionCosts: [String: Double],
+        alertFired: Bool,
         to defaults: UserDefaults,
         now: Date,
         calendar: Calendar
     ) {
         defaults.set(DailyCoolnessPreference.dayIdentifier(for: now, calendar: calendar), forKey: dayKey)
         defaults.set(totalCost.isFinite ? max(0, totalCost) : 0, forKey: totalKey)
+        defaults.set(alertFired, forKey: alertFiredKey)
         let boundedSessions = boundedSessionCosts(sessionCosts)
         if let data = try? JSONEncoder().encode(boundedSessions) {
             defaults.set(data, forKey: sessionsKey)
         }
     }
 
+    /// The threshold is deliberately not day-scoped: it survives midnight rollover and a cost
+    /// tracking disable/re-enable round trip.
+    public static func loadThreshold(from defaults: UserDefaults) -> Double {
+        DailyCostAlert.sanitize(defaults.double(forKey: alertThresholdKey))
+    }
+
+    public static func saveThreshold(_ threshold: Double, to defaults: UserDefaults) {
+        defaults.set(DailyCostAlert.sanitize(threshold), forKey: alertThresholdKey)
+    }
+
     public static func clear(from defaults: UserDefaults) {
         defaults.removeObject(forKey: dayKey)
         defaults.removeObject(forKey: totalKey)
         defaults.removeObject(forKey: sessionsKey)
+        defaults.removeObject(forKey: alertFiredKey)
     }
 }
 
