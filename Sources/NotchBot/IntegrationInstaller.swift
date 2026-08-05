@@ -45,9 +45,8 @@ final class IntegrationInstaller: ObservableObject {
     @Published private(set) var message = "Integrations not installed"
     @Published private(set) var launchesAtLogin = SMAppService.mainApp.status == .enabled
     @Published private(set) var requiresUpdate = false
+    @Published private(set) var isInstalled = false
     @Published private(set) var costTrackingEnabled: Bool
-
-    private static let costTrackingKey = "costTrackingEnabled"
 
     private let environment: Environment
     private let paths: IntegrationPaths
@@ -88,7 +87,7 @@ final class IntegrationInstaller: ObservableObject {
             settings: settings,
             plugin: plugin
         )
-        costTrackingEnabled = environment.defaults.bool(forKey: Self.costTrackingKey)
+        costTrackingEnabled = environment.defaults.bool(forKey: DailyCostPreference.trackingEnabledKey)
         refreshStatus()
     }
 
@@ -146,6 +145,7 @@ final class IntegrationInstaller: ObservableObject {
             message = "Integrations removed"
             costTrackingEnabled = false
             requiresUpdate = false
+            isInstalled = false
         } catch {
             message = "Removal failed: \(error.localizedDescription)"
         }
@@ -172,8 +172,12 @@ final class IntegrationInstaller: ObservableObject {
                 return
             }
             try costTracking.enable()
-            environment.defaults.set(true, forKey: Self.costTrackingKey)
+            environment.defaults.set(true, forKey: DailyCostPreference.trackingEnabledKey)
             costTrackingEnabled = true
+            NotificationCenter.default.post(
+                name: .notchBotCostTrackingEnabled,
+                object: environment.defaults
+            )
             message = "Cost tracking enabled"
         } catch {
             if (try? ownership.isOwnedPlugin(at: paths.openCodePlugin)) == true {
@@ -196,9 +200,12 @@ final class IntegrationInstaller: ObservableObject {
     }
 
     private func clearCostTrackingPreferences() {
-        environment.defaults.set(false, forKey: Self.costTrackingKey)
+        environment.defaults.set(false, forKey: DailyCostPreference.trackingEnabledKey)
         DailyCostPreference.clear(from: environment.defaults)
-        NotificationCenter.default.post(name: .notchBotCostTrackingDisabled, object: nil)
+        NotificationCenter.default.post(
+            name: .notchBotCostTrackingDisabled,
+            object: environment.defaults
+        )
     }
 
     private func performInstallation(allowLegacyUpdate: Bool) {
@@ -229,6 +236,7 @@ final class IntegrationInstaller: ObservableObject {
             try ownership.removeLegacyPrivacyPolicyIfOwned()
             message = "OpenCode and Claude Code connected"
             requiresUpdate = false
+            isInstalled = true
         } catch {
             message = "Installation failed: \(error.localizedDescription)"
         }
@@ -246,10 +254,12 @@ final class IntegrationInstaller: ObservableObject {
                 message = "Integration update required"
                 requiresUpdate = true
             }
+            isInstalled = false
             return
         }
         message = "Integration files installed"
         requiresUpdate = false
+        isInstalled = true
     }
 
     private func installHookExecutable(allowLegacyUpdate: Bool) throws -> URL {

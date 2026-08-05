@@ -350,3 +350,22 @@ private func installerPermissions(of url: URL) throws -> Int {
     let value = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber
     return value?.intValue ?? 0
 }
+
+@MainActor
+@Test func installerReportsInstalledStateForTheMenuLabel() throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let installer = fixture.installer()
+    #expect(!installer.isInstalled)
+
+    installer.install()
+    #expect(installer.isInstalled)
+    #expect(!installer.requiresUpdate)
+
+    // A fresh installer reading the same on-disk state must agree, so the menu offers Reinstall.
+    #expect(fixture.installer().isInstalled)
+
+    installer.uninstall()
+    #expect(!installer.isInstalled)
+    #expect(!fixture.installer().isInstalled)
+}

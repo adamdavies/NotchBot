@@ -97,7 +97,10 @@ private struct NotchBotMenu: View {
                 if integrations.requiresUpdate {
                     Button("Update Integrations") { integrations.updateIntegrations() }
                 } else {
-                    Button("Install Integrations") { integrations.install() }
+                    Button(integrations.isInstalled
+                        ? "Reinstall Integrations"
+                        : "Install Integrations"
+                    ) { integrations.install() }
                 }
                 Button("Remove Integrations") {
                     integrations.uninstall()
@@ -112,6 +115,12 @@ private struct NotchBotMenu: View {
                     } else {
                         confirmCostTracking()
                     }
+                }
+                if integrations.costTrackingEnabled {
+                    Text(model.dailyCostMenuText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Set Cost Alert…") { promptForCostAlert() }
                 }
                 Button(integrations.launchesAtLogin ? "Disable Launch at Login" : "Enable Launch at Login") {
                     integrations.toggleLaunchAtLogin()
@@ -166,6 +175,29 @@ private struct NotchBotMenu: View {
             if alert.runModal() == .alertFirstButtonReturn {
                 integrations.enableCostTracking()
             }
+        }
+    }
+
+    /// The menu-bar dropdown is a `.menu`-style `MenuBarExtra`, so it cannot host a text field.
+    /// Threshold entry uses a modal alert, matching `confirmCostTracking()`.
+    private func promptForCostAlert() {
+        Task { @MainActor in
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Set daily cost alert"
+            alert.informativeText = "NotchBot notifies you once a day when today's estimated agent spend passes this amount. Leave the field empty to turn the alert off.\n\nCost estimates are based on provider pricing and may not reflect enterprise discounts or subscription allowances."
+            alert.alertStyle = .informational
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+            field.placeholderString = "Amount in USD, for example 10.00"
+            if model.dailyCostAlertThreshold > 0 {
+                field.stringValue = String(format: "%.2f", model.dailyCostAlertThreshold)
+            }
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            model.setDailyCostThreshold(DailyCostAlert.parseThreshold(field.stringValue))
         }
     }
 

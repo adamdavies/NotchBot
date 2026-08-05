@@ -5,6 +5,7 @@ import NotchBotCore
 import UserNotifications
 
 extension Notification.Name {
+    static let notchBotCostTrackingEnabled = Notification.Name("NotchBotCostTrackingEnabled")
     static let notchBotCostTrackingDisabled = Notification.Name("NotchBotCostTrackingDisabled")
 }
 
@@ -42,12 +43,15 @@ final class ActivityModel: ObservableObject {
     @Published private(set) var previewCoolnessTier: CoolnessTier?
     @Published private(set) var dailyCompletionCount: Int
     @Published private(set) var dailyCostTotal: Double
+    @Published private(set) var dailyCostAlertThreshold: Double
     @Published private(set) var activeSessions: [SessionActivity] = []
     @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
 
     private var reducer = ActivityReducer()
     private var coolnessTracker: DailyCoolnessTracker
     private var costTracker: DailyCostTracker
+    private var costAlert: DailyCostAlert
+    private var costTrackingEnabled: Bool
     private var expiryTasks: [SessionKey: Task<Void, Never>] = [:]
     private var maintenanceTask: Task<Void, Never>?
     private let defaults: UserDefaults
@@ -82,6 +86,10 @@ final class ActivityModel: ObservableObject {
         let savedCost = DailyCostPreference.load(from: defaults, now: initialNow, calendar: calendar)
         dailyCostTotal = savedCost.totalCost
         costTracker = DailyCostTracker(totalCost: savedCost.totalCost, sessionCosts: savedCost.sessionCosts)
+        let savedThreshold = DailyCostPreference.loadThreshold(from: defaults)
+        costAlert = DailyCostAlert(threshold: savedThreshold, hasFired: savedCost.alertFired)
+        dailyCostAlertThreshold = savedThreshold
+        costTrackingEnabled = defaults.bool(forKey: DailyCostPreference.trackingEnabledKey)
         if enableBackgroundMaintenance {
             maintenanceTask = Task { [weak self, sleep] in
                 while !Task.isCancelled {
@@ -93,6 +101,7 @@ final class ActivityModel: ObservableObject {
             scheduleDailyReset(now: initialNow)
             installDailyResetObservers()
         }
+        installCostTrackingObserver()
     }
 
     var displayedRobotState: RobotState {
@@ -149,6 +158,28 @@ final class ActivityModel: ObservableObject {
         String(format: "~$%.2f today", dailyCostTotal)
     }
 
+    var dailyCostAlertLevel: DailyCostAlertLevel {
+        costAlert.level(total: dailyCostTotal)
+    }
+
+    var dailyCostThresholdDisplayText: String? {
+        guard costAlert.isEnabled else { return nil }
+        return String(format: "Alert at $%.2f", costAlert.threshold)
+    }
+
+    var dailyCostMenuText: String {
+        let total = String(format: "Today: ~$%.2f", dailyCostTotal)
+        return "\(total) · \(dailyCostThresholdDisplayText ?? "No cost alert set")"
+    }
+
+    /// `value` is a plain USD amount; zero or negative disables the alert.
+    func setDailyCostThreshold(_ value: Double) {
+        costAlert.setThreshold(value)
+        dailyCostAlertThreshold = costAlert.threshold
+        DailyCostPreference.saveThreshold(costAlert.threshold, to: defaults)
+        saveDailyCost(now: nowProvider())
+    }
+
     func receive(_ event: AgentEvent) {
         let now = nowProvider()
         refreshDailyCoolness(now: now)
@@ -178,15 +209,15 @@ final class ActivityModel: ObservableObject {
                 calendar: calendar
             )
         }
-        if costTracker.apply(event) {
+        let previousCostTotal = costTracker.totalCost
+        if costTrackingEnabled, costTracker.apply(event) {
             dailyCostTotal = costTracker.totalCost
-            DailyCostPreference.save(
-                totalCost: costTracker.totalCost,
-                sessionCosts: costTracker.sessionCosts,
-                to: defaults,
-                now: now,
-                calendar: calendar
+            let crossedThreshold = costAlert.evaluate(
+                previousTotal: previousCostTotal,
+                total: costTracker.totalCost
             )
+            saveDailyCost(now: now)
+            if crossedThreshold { sendCostAlertNotification() }
         }
 
         if change.shouldNotify {
@@ -318,6 +349,14 @@ final class ActivityModel: ObservableObject {
         )
     }
 
+    private func sendCostAlertNotification() {
+        notifications.send(
+            "notchbot.cost.alert",
+            "NotchBot",
+            String(format: "Today's agent spend has passed $%.2f", costAlert.threshold)
+        )
+    }
+
     private func notificationIdentifier(for event: AgentEvent) -> String? {
         event.request.map {
             [event.source.rawValue, event.sessionID, $0.kind.rawValue, $0.id].joined(separator: "\u{1f}")
@@ -382,10 +421,16 @@ final class ActivityModel: ObservableObject {
             calendar: calendar
         )
         costTracker.beginNewDay()
+        costAlert.beginNewDay()
         dailyCostTotal = 0
+        saveDailyCost(now: now)
+    }
+
+    private func saveDailyCost(now: Date) {
         DailyCostPreference.save(
-            totalCost: 0,
+            totalCost: costTracker.totalCost,
             sessionCosts: costTracker.sessionCosts,
+            alertFired: costAlert.hasFired,
             to: defaults,
             now: now,
             calendar: calendar
@@ -411,6 +456,33 @@ final class ActivityModel: ObservableObject {
         }
     }
 
+    /// Registered independently of background maintenance: this is a user-driven reset, not a timer.
+    private func installCostTrackingObserver() {
+        calendarObservers.append(NotificationCenter.default.addObserver(
+            forName: .notchBotCostTrackingEnabled,
+            object: defaults,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.costTrackingEnabled = true
+            }
+        })
+        calendarObservers.append(NotificationCenter.default.addObserver(
+            forName: .notchBotCostTrackingDisabled,
+            object: defaults,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.costTrackingEnabled = false
+                self.costTracker.beginNewDay()
+                self.costAlert = DailyCostAlert()
+                self.dailyCostTotal = 0
+                self.dailyCostAlertThreshold = 0
+            }
+        })
+    }
+
     private func installDailyResetObservers() {
         let names: [Notification.Name] = [
             .NSCalendarDayChanged,
@@ -427,16 +499,6 @@ final class ActivityModel: ObservableObject {
                 }
             }
         }
-        calendarObservers.append(NotificationCenter.default.addObserver(
-            forName: .notchBotCostTrackingDisabled,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.costTracker.reset()
-                self?.dailyCostTotal = 0
-            }
-        })
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,

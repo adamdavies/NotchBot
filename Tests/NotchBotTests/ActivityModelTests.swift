@@ -283,6 +283,7 @@ private func makeModelFixture(
     let suiteName = "ActivityModelTests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defaults.removePersistentDomain(forName: suiteName)
+    defaults.set(true, forKey: DailyCostPreference.trackingEnabledKey)
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
     let date = try #require(calendar.date(from: DateComponents(
@@ -311,6 +312,7 @@ private func makeModelFixture(
         clock: clock,
         notifications: notifications,
         defaults: defaults,
+        calendar: calendar,
         suiteName: suiteName
     )
 }
@@ -321,6 +323,7 @@ private struct ModelFixture {
     let clock: TestDateProvider
     let notifications: NotificationRecorder
     let defaults: UserDefaults
+    let calendar: Calendar
     let suiteName: String
 
     func cleanup() {
@@ -348,4 +351,158 @@ private func waitUntil(_ condition: @MainActor () -> Bool) async -> Bool {
 
 private func drainScheduledTasks() async {
     for _ in 0..<10 { await Task.yield() }
+}
+
+@Test @MainActor func costAlertNotifiesOnceOnTheEventThatCrossesTheThreshold() throws {
+    let fixture = try makeModelFixture()
+    defer { fixture.cleanup() }
+    fixture.model.setDailyCostThreshold(10)
+
+    fixture.model.receive(costEvent(session: "session", cost: 9.50, at: fixture.clock.now))
+    #expect(fixture.notifications.sent.isEmpty)
+    #expect(fixture.model.dailyCostAlertLevel == .warning)
+
+    fixture.model.receive(costEvent(
+        session: "session", cost: 10.02, at: fixture.clock.now.addingTimeInterval(1)
+    ))
+    #expect(fixture.notifications.sent.count == 1)
+    #expect(fixture.notifications.sent.first?.title == "NotchBot")
+    #expect(fixture.notifications.sent.first?.body == "Today's agent spend has passed $10.00")
+    #expect(fixture.model.dailyCostAlertLevel == .exceeded)
+
+    fixture.model.receive(costEvent(
+        session: "session", cost: 10.40, at: fixture.clock.now.addingTimeInterval(2)
+    ))
+    fixture.model.receive(costEvent(
+        session: "other", cost: 5.00, at: fixture.clock.now.addingTimeInterval(3)
+    ))
+
+    #expect(fixture.notifications.sent.count == 1)
+    #expect(fixture.defaults.bool(forKey: DailyCostPreference.alertFiredKey))
+}
+
+@Test @MainActor func costAlertStaysSilentWhenNoThresholdIsConfigured() throws {
+    let fixture = try makeModelFixture()
+    defer { fixture.cleanup() }
+
+    fixture.model.receive(costEvent(session: "session", cost: 250, at: fixture.clock.now))
+
+    #expect(fixture.notifications.sent.isEmpty)
+    #expect(fixture.model.dailyCostAlertLevel == .normal)
+    #expect(fixture.model.dailyCostThresholdDisplayText == nil)
+    #expect(fixture.model.dailyCostMenuText == "Today: ~$250.00 · No cost alert set")
+}
+
+@Test @MainActor func costAlertRearmsAfterTheDailyRollover() throws {
+    let fixture = try makeModelFixture()
+    defer { fixture.cleanup() }
+    fixture.model.setDailyCostThreshold(10)
+
+    fixture.model.receive(costEvent(session: "session", cost: 12, at: fixture.clock.now))
+    #expect(fixture.notifications.sent.count == 1)
+
+    fixture.clock.now = fixture.clock.now.addingTimeInterval(24 * 60 * 60)
+    fixture.model.receive(costEvent(session: "session", cost: 13, at: fixture.clock.now))
+    #expect(fixture.model.dailyCostTotal == 1)
+    #expect(fixture.notifications.sent.count == 1)
+    #expect(!fixture.defaults.bool(forKey: DailyCostPreference.alertFiredKey))
+
+    fixture.model.receive(costEvent(
+        session: "session", cost: 25, at: fixture.clock.now.addingTimeInterval(1)
+    ))
+
+    #expect(fixture.notifications.sent.count == 2)
+    #expect(fixture.model.dailyCostAlertThreshold == 10)
+}
+
+@Test @MainActor func loweringTheThresholdBelowTheCurrentTotalDoesNotNotifyRetroactively() throws {
+    let fixture = try makeModelFixture()
+    defer { fixture.cleanup() }
+    fixture.model.setDailyCostThreshold(100)
+
+    fixture.model.receive(costEvent(session: "session", cost: 12, at: fixture.clock.now))
+    #expect(fixture.notifications.sent.isEmpty)
+
+    fixture.model.setDailyCostThreshold(10)
+    fixture.model.receive(costEvent(
+        session: "session", cost: 20, at: fixture.clock.now.addingTimeInterval(1)
+    ))
+
+    #expect(fixture.notifications.sent.isEmpty)
+    #expect(fixture.model.dailyCostAlertLevel == .warning)
+    #expect(fixture.model.dailyCostMenuText == "Today: ~$20.00 · Alert at $10.00")
+}
+
+@Test @MainActor func disablingCostTrackingClearsAlertStateAndIgnoresLaterCostEvents() async throws {
+    let fixture = try makeModelFixture()
+    defer { fixture.cleanup() }
+    fixture.model.setDailyCostThreshold(10)
+    fixture.model.receive(costEvent(session: "session", cost: 12, at: fixture.clock.now))
+    #expect(fixture.notifications.sent.count == 1)
+
+    fixture.defaults.set(false, forKey: DailyCostPreference.trackingEnabledKey)
+    DailyCostPreference.clear(from: fixture.defaults)
+    NotificationCenter.default.post(
+        name: .notchBotCostTrackingDisabled,
+        object: fixture.defaults
+    )
+    await drainScheduledTasks()
+
+    #expect(fixture.model.dailyCostTotal == 0)
+    #expect(fixture.model.dailyCostAlertLevel == .normal)
+    #expect(fixture.model.dailyCostAlertThreshold == 0)
+    #expect(DailyCostPreference.loadThreshold(from: fixture.defaults) == 0)
+
+    fixture.model.receive(costEvent(
+        session: "later", cost: 15, at: fixture.clock.now.addingTimeInterval(1)
+    ))
+    #expect(fixture.model.dailyCostTotal == 0)
+    #expect(fixture.notifications.sent.count == 1)
+
+    fixture.defaults.set(true, forKey: DailyCostPreference.trackingEnabledKey)
+    NotificationCenter.default.post(
+        name: .notchBotCostTrackingEnabled,
+        object: fixture.defaults
+    )
+    fixture.model.receive(costEvent(
+        session: "session", cost: 13, at: fixture.clock.now.addingTimeInterval(2)
+    ))
+    #expect(fixture.model.dailyCostTotal == 1)
+    #expect(fixture.notifications.sent.count == 1)
+}
+
+@Test @MainActor func costThresholdSurvivesAModelRestart() throws {
+    let fixture = try makeModelFixture()
+    defer { fixture.cleanup() }
+    fixture.model.setDailyCostThreshold(10)
+    fixture.model.receive(costEvent(session: "session", cost: 12, at: fixture.clock.now))
+    fixture.model.shutdown()
+
+    let restarted = ActivityModel(
+        defaults: fixture.defaults,
+        calendar: fixture.calendar,
+        nowProvider: { [clock = fixture.clock] in clock.now },
+        notifications: fixture.notifications.dependencies,
+        enableBackgroundMaintenance: false
+    )
+    defer { restarted.shutdown() }
+
+    #expect(restarted.dailyCostAlertThreshold == 10)
+    #expect(restarted.dailyCostTotal == 12)
+    restarted.receive(costEvent(
+        session: "session", cost: 20, at: fixture.clock.now.addingTimeInterval(1)
+    ))
+
+    #expect(fixture.notifications.sent.count == 1)
+}
+
+@MainActor
+private func costEvent(session: String, cost: Double, at timestamp: Date) -> AgentEvent {
+    AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: session,
+        timestamp: timestamp,
+        costUSD: cost
+    )
 }

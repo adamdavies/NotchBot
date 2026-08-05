@@ -20,7 +20,7 @@ Permission rows separate the native permission scope from its command, path, URL
 
 Acknowledged attention entries remain in memory as Idle until a new request or lifecycle event needs attention, the session ends, or stale-session cleanup removes them. Unresolved request metadata and permission controls remain available after visual acknowledgement.
 
-Daily coolness persists a local date identifier and aggregate observed top-level completion count in `UserDefaults`. Visual tiers, including Cap at 150 completions, are derived from that count and add no retained data. When cost tracking is enabled, estimated daily spend persists the local date, aggregate estimated USD total, and up to 10,000 source-qualified cumulative cost baselines needed to deduplicate provider updates across app restarts and midnight; inactive baselines are pruned. Debug previews do not modify persisted progress or spend.
+Daily coolness persists a local date identifier and aggregate observed top-level completion count in `UserDefaults`. Visual tiers, including Cap at 150 completions, are derived from that count and add no retained data. When cost tracking is enabled, estimated daily spend persists the local date, aggregate estimated USD total, and up to 10,000 source-qualified cumulative cost baselines needed to deduplicate provider updates across app restarts and midnight; inactive baselines are pruned. The optional daily cost alert persists only the user-entered USD threshold and a day-scoped boolean recording that today's notification has been sent; both are cleared when cost tracking is disabled, and neither leaves the machine. Debug previews do not modify persisted progress or spend.
 
 Claude Code passes its hook JSON on stdin. While cost tracking is enabled, a generated status-line wrapper also passes Claude's documented status-line JSON to the helper and then invokes the complete prior status-line command with the original input. The decoder selects only session ID and numeric estimated cost from that payload. Prompt, transcript, response, model, context-window, rate-limit, and token fields can reach the helper process in raw Claude input, but they are not selected, forwarded, or retained. OpenCode constructs an allowlisted stdin payload and, only after opt-in, selects numeric assistant-message cost estimates; it does not pass through raw events or assistant-message content.
 
@@ -28,4 +28,4 @@ The integration uses the helper and its `.notchbot-owner` marker, `integration-i
 
 ## Sandbox Status
 
-NotchBot 0.7.0 is not App Sandbox enabled and requests no signing entitlements.
+NotchBot 0.8.0 is not App Sandbox enabled and requests no signing entitlements.
