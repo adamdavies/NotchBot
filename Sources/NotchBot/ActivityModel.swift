@@ -5,6 +5,7 @@ import NotchBotCore
 import UserNotifications
 
 extension Notification.Name {
+    static let notchBotCostTrackingEnabled = Notification.Name("NotchBotCostTrackingEnabled")
     static let notchBotCostTrackingDisabled = Notification.Name("NotchBotCostTrackingDisabled")
 }
 
@@ -50,6 +51,7 @@ final class ActivityModel: ObservableObject {
     private var coolnessTracker: DailyCoolnessTracker
     private var costTracker: DailyCostTracker
     private var costAlert: DailyCostAlert
+    private var costTrackingEnabled: Bool
     private var expiryTasks: [SessionKey: Task<Void, Never>] = [:]
     private var maintenanceTask: Task<Void, Never>?
     private let defaults: UserDefaults
@@ -87,6 +89,7 @@ final class ActivityModel: ObservableObject {
         let savedThreshold = DailyCostPreference.loadThreshold(from: defaults)
         costAlert = DailyCostAlert(threshold: savedThreshold, hasFired: savedCost.alertFired)
         dailyCostAlertThreshold = savedThreshold
+        costTrackingEnabled = defaults.bool(forKey: DailyCostPreference.trackingEnabledKey)
         if enableBackgroundMaintenance {
             maintenanceTask = Task { [weak self, sleep] in
                 while !Task.isCancelled {
@@ -171,7 +174,7 @@ final class ActivityModel: ObservableObject {
 
     /// `value` is a plain USD amount; zero or negative disables the alert.
     func setDailyCostThreshold(_ value: Double) {
-        costAlert.setThreshold(value, currentTotal: dailyCostTotal)
+        costAlert.setThreshold(value)
         dailyCostAlertThreshold = costAlert.threshold
         DailyCostPreference.saveThreshold(costAlert.threshold, to: defaults)
         saveDailyCost(now: nowProvider())
@@ -206,9 +209,13 @@ final class ActivityModel: ObservableObject {
                 calendar: calendar
             )
         }
-        if costTracker.apply(event) {
+        let previousCostTotal = costTracker.totalCost
+        if costTrackingEnabled, costTracker.apply(event) {
             dailyCostTotal = costTracker.totalCost
-            let crossedThreshold = costAlert.evaluate(total: costTracker.totalCost)
+            let crossedThreshold = costAlert.evaluate(
+                previousTotal: previousCostTotal,
+                total: costTracker.totalCost
+            )
             saveDailyCost(now: now)
             if crossedThreshold { sendCostAlertNotification() }
         }
@@ -452,15 +459,26 @@ final class ActivityModel: ObservableObject {
     /// Registered independently of background maintenance: this is a user-driven reset, not a timer.
     private func installCostTrackingObserver() {
         calendarObservers.append(NotificationCenter.default.addObserver(
-            forName: .notchBotCostTrackingDisabled,
-            object: nil,
+            forName: .notchBotCostTrackingEnabled,
+            object: defaults,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
+                self?.costTrackingEnabled = true
+            }
+        })
+        calendarObservers.append(NotificationCenter.default.addObserver(
+            forName: .notchBotCostTrackingDisabled,
+            object: defaults,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
                 guard let self else { return }
-                self.costTracker.reset()
-                self.costAlert.beginNewDay()
+                self.costTrackingEnabled = false
+                self.costTracker.beginNewDay()
+                self.costAlert = DailyCostAlert()
                 self.dailyCostTotal = 0
+                self.dailyCostAlertThreshold = 0
             }
         })
     }

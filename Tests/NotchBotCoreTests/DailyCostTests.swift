@@ -219,8 +219,7 @@ import Testing
     #expect(defaults.object(forKey: DailyCostPreference.totalKey) == nil)
     #expect(defaults.object(forKey: DailyCostPreference.sessionsKey) == nil)
     #expect(defaults.object(forKey: DailyCostPreference.alertFiredKey) == nil)
-    // The configured threshold survives a cost-tracking disable/re-enable round trip.
-    #expect(DailyCostPreference.loadThreshold(from: defaults) == 10)
+    #expect(DailyCostPreference.loadThreshold(from: defaults) == 0)
 }
 
 @Test func dailyCostInitializesFromPersistedSessionCosts() {
@@ -242,10 +241,10 @@ import Testing
 @Test func dailyCostAlertFiresOnceWhenTheThresholdIsCrossed() {
     var alert = DailyCostAlert(threshold: 10)
 
-    let below = alert.evaluate(total: 9.99)
-    let crossing = alert.evaluate(total: 10.02)
-    let after = alert.evaluate(total: 10.40)
-    let later = alert.evaluate(total: 11.00)
+    let below = alert.evaluate(previousTotal: 0, total: 9.99)
+    let crossing = alert.evaluate(previousTotal: 9.99, total: 10.02)
+    let after = alert.evaluate(previousTotal: 10.02, total: 10.40)
+    let later = alert.evaluate(previousTotal: 10.40, total: 11.00)
 
     #expect(!below)
     #expect(crossing)
@@ -257,7 +256,7 @@ import Testing
 @Test func dailyCostAlertStaysSilentWhenDisabled() {
     var alert = DailyCostAlert(threshold: 0)
 
-    let fired = alert.evaluate(total: 500)
+    let fired = alert.evaluate(previousTotal: 0, total: 500)
 
     #expect(!fired)
     #expect(!alert.hasFired)
@@ -265,37 +264,37 @@ import Testing
 
 @Test func dailyCostAlertDoesNotFireRetroactivelyWhenLowered() {
     var alert = DailyCostAlert(threshold: 100)
-    let beforeLowering = alert.evaluate(total: 12)
+    let beforeLowering = alert.evaluate(previousTotal: 0, total: 12)
 
-    alert.setThreshold(10, currentTotal: 12)
-    let atSameTotal = alert.evaluate(total: 12)
-    let afterMoreSpend = alert.evaluate(total: 20)
+    alert.setThreshold(10)
+    let atSameTotal = alert.evaluate(previousTotal: 12, total: 12)
+    let afterMoreSpend = alert.evaluate(previousTotal: 12, total: 20)
 
     #expect(!beforeLowering)
-    #expect(alert.hasFired)
+    #expect(!alert.hasFired)
     #expect(!atSameTotal)
     #expect(!afterMoreSpend)
 }
 
-@Test func dailyCostAlertRearmsWhenRaisedAboveTheCurrentTotal() {
+@Test func dailyCostAlertDoesNotRearmWhenTheThresholdChanges() {
     var alert = DailyCostAlert(threshold: 10)
-    let firstCrossing = alert.evaluate(total: 12)
+    let firstCrossing = alert.evaluate(previousTotal: 0, total: 12)
 
-    alert.setThreshold(25, currentTotal: 12)
-    let belowNewThreshold = alert.evaluate(total: 20)
-    let atNewThreshold = alert.evaluate(total: 25)
+    alert.setThreshold(25)
+    let belowNewThreshold = alert.evaluate(previousTotal: 12, total: 20)
+    let atNewThreshold = alert.evaluate(previousTotal: 20, total: 25)
 
     #expect(firstCrossing)
     #expect(!belowNewThreshold)
-    #expect(atNewThreshold)
+    #expect(!atNewThreshold)
 }
 
 @Test func dailyCostAlertResetsWithTheDay() {
     var alert = DailyCostAlert(threshold: 10)
-    let yesterday = alert.evaluate(total: 15)
+    let yesterday = alert.evaluate(previousTotal: 0, total: 15)
 
     alert.beginNewDay()
-    let today = alert.evaluate(total: 10)
+    let today = alert.evaluate(previousTotal: 0, total: 10)
 
     #expect(yesterday)
     #expect(alert.threshold == 10)
@@ -309,7 +308,7 @@ import Testing
     #expect(DailyCostAlert.sanitize(1_000_000) == DailyCostAlert.maximumThreshold)
     #expect(DailyCostAlert.sanitize(10.005) == 10.01)
     #expect(DailyCostAlert(threshold: -1).isEnabled == false)
-    #expect(DailyCostAlert(threshold: 0, hasFired: true).hasFired == false)
+    #expect(DailyCostAlert(threshold: 0, hasFired: true).hasFired)
 }
 
 @Test func dailyCostAlertLevelEscalatesAtEightyPercentAndAtTheThreshold() {
@@ -319,8 +318,12 @@ import Testing
     #expect(alert.level(total: 7.99) == .normal)
     #expect(alert.level(total: 8) == .warning)
     #expect(alert.level(total: 9.99) == .warning)
-    #expect(alert.level(total: 10) == .exceeded)
-    #expect(alert.level(total: 40) == .exceeded)
+    #expect(alert.level(total: 10) == .warning)
+    #expect(alert.level(total: 40) == .warning)
+    var firedAlert = alert
+    let fired = firedAlert.evaluate(previousTotal: 9.99, total: 10)
+    #expect(fired)
+    #expect(firedAlert.level(total: 10) == .exceeded)
     #expect(DailyCostAlert(threshold: 0).level(total: 40) == .normal)
 }
 
@@ -334,7 +337,14 @@ import Testing
     #expect(DailyCostAlert.parseThreshold("", locale: locale) == 0)
     #expect(DailyCostAlert.parseThreshold("   ", locale: locale) == 0)
     #expect(DailyCostAlert.parseThreshold("free", locale: locale) == 0)
-    #expect(DailyCostAlert.parseThreshold("-5", locale: locale) == 5)
+    #expect(DailyCostAlert.parseThreshold("-5", locale: locale) == 0)
+    #expect(DailyCostAlert.parseThreshold("$-5", locale: locale) == 0)
+    #expect(DailyCostAlert.parseThreshold("10-5", locale: locale) == 0)
+    #expect(DailyCostAlert.parseThreshold("12abc34", locale: locale) == 0)
+    #expect(DailyCostAlert.parseThreshold("10,00", locale: locale) == 0)
+    #expect(DailyCostAlert.parseThreshold("1,2", locale: locale) == 0)
+    #expect(DailyCostAlert.parseThreshold("1,250.50", locale: locale) == 1_250.50)
+    #expect(DailyCostAlert.parseThreshold("1.250,50", locale: Locale(identifier: "de_DE")) == 1_250.50)
 }
 
 @Test func dailyCostPreferenceScopesTheFiredFlagToTheDayAndNotTheThreshold() throws {

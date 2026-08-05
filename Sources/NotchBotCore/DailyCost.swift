@@ -66,7 +66,7 @@ public struct DailyCostAlert: Sendable, Equatable {
 
     public init(threshold: Double = 0, hasFired: Bool = false) {
         self.threshold = Self.sanitize(threshold)
-        self.hasFired = self.threshold > 0 && hasFired
+        self.hasFired = hasFired
     }
 
     public var isEnabled: Bool { threshold > 0 }
@@ -79,30 +79,50 @@ public struct DailyCostAlert: Sendable, Equatable {
     /// Parses a plain user-entered currency amount. Empty, unparseable, or non-positive input
     /// disables the alert.
     public static func parseThreshold(_ text: String, locale: Locale = .current) -> Double {
-        let cleaned = text.filter { $0.isNumber || $0 == "." || $0 == "," }
-        guard !cleaned.isEmpty else { return 0 }
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.locale = locale
-        if let number = formatter.number(from: cleaned) {
-            return sanitize(number.doubleValue)
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let symbol = locale.currencySymbol, cleaned.hasPrefix(symbol) {
+            cleaned.removeFirst(symbol.count)
+            cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        return sanitize(Double(cleaned.replacingOccurrences(of: ",", with: "")) ?? 0)
+        guard !cleaned.isEmpty,
+              !cleaned.contains("-"),
+              cleaned.allSatisfy({ $0.isNumber || $0 == "." || $0 == "," || $0.isWhitespace }) else {
+            return 0
+        }
+        cleaned.removeAll(where: \Character.isWhitespace)
+        let decimalSeparator = locale.decimalSeparator ?? "."
+        let groupingSeparator = locale.groupingSeparator ?? ","
+        let decimalParts = cleaned.components(separatedBy: decimalSeparator)
+        guard decimalParts.count <= 2 else { return 0 }
+        let integerPart = decimalParts[0]
+        let groups = integerPart.components(separatedBy: groupingSeparator)
+        if groups.count > 1 {
+            guard (1...3).contains(groups[0].count),
+                  groups.dropFirst().allSatisfy({ $0.count == 3 }) else { return 0 }
+        }
+        guard groups.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\Character.isNumber) }) else { return 0 }
+        let fraction = decimalParts.count == 2 ? decimalParts[1] : ""
+        guard fraction.allSatisfy(\Character.isNumber) else { return 0 }
+        let canonical = groups.joined() + (decimalParts.count == 2 ? ".\(fraction)" : "")
+        return sanitize(Double(canonical) ?? 0)
     }
 
-    /// Returns `true` exactly once per day, on the update that takes `total` across the threshold.
+    /// Returns `true` exactly once per day, on the update that takes the total across the threshold.
     @discardableResult
-    public mutating func evaluate(total: Double) -> Bool {
-        guard threshold > 0, !hasFired, total.isFinite, total >= threshold else { return false }
+    public mutating func evaluate(previousTotal: Double, total: Double) -> Bool {
+        guard threshold > 0,
+              !hasFired,
+              previousTotal.isFinite,
+              total.isFinite,
+              previousTotal < threshold,
+              total >= threshold else { return false }
         hasFired = true
         return true
     }
 
-    /// Arms the alert only when the new threshold is genuinely above the current total, so lowering
-    /// it below an already-exceeded total cannot fire retroactively.
-    public mutating func setThreshold(_ value: Double, currentTotal: Double) {
+    /// Threshold edits never rearm an alert that already fired during the current day.
+    public mutating func setThreshold(_ value: Double) {
         threshold = Self.sanitize(value)
-        hasFired = threshold > 0 && currentTotal.isFinite && currentTotal >= threshold
     }
 
     public mutating func beginNewDay() {
@@ -111,13 +131,14 @@ public struct DailyCostAlert: Sendable, Equatable {
 
     public func level(total: Double) -> DailyCostAlertLevel {
         guard threshold > 0, total.isFinite, total > 0 else { return .normal }
-        if total >= threshold { return .exceeded }
+        if hasFired, total >= threshold { return .exceeded }
         if total >= threshold * Self.warningFraction { return .warning }
         return .normal
     }
 }
 
 public enum DailyCostPreference {
+    public static let trackingEnabledKey = "costTrackingEnabled"
     public static let dayKey = "dailyCostDay"
     public static let totalKey = "dailyCostTotal"
     public static let sessionsKey = "dailyCostSessions"
@@ -177,6 +198,7 @@ public enum DailyCostPreference {
         defaults.removeObject(forKey: totalKey)
         defaults.removeObject(forKey: sessionsKey)
         defaults.removeObject(forKey: alertFiredKey)
+        defaults.removeObject(forKey: alertThresholdKey)
     }
 }
 
