@@ -34,6 +34,22 @@ public struct DailyCostTracker: Sendable {
         return true
     }
 
+    /// The highest cumulative figure already recorded for this session, across whatever cost
+    /// generations it has been seen under.
+    ///
+    /// These baselines survive a restart, which is what makes them usable as a session-timeline
+    /// baseline: a session that was already running when NotchBot launched must not have spend it
+    /// never watched accrue charged to the first cycle NotchBot happens to observe. The composite key
+    /// is opaque to callers, so the match is done here rather than by reconstructing keys outside.
+    public func cumulativeCost(source: AgentSource, sessionID: String) -> Double? {
+        let exact = "\(source.rawValue):\(sessionID)"
+        let generationPrefix = exact + ":"
+        return sessionCosts
+            .filter { $0.key == exact || $0.key.hasPrefix(generationPrefix) }
+            .values
+            .max()
+    }
+
     public mutating func beginNewDay() {
         totalCost = 0
         sessionCosts = sessionCosts.filter { seenSessionKeys.contains($0.key) }

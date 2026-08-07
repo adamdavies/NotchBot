@@ -37,6 +37,12 @@ struct IntegrationPaths {
         applicationSupportDirectory.appendingPathComponent("statusline-state.json")
     }
 
+    /// Today's completed sessions. The only NotchBot state that outlives the process and carries
+    /// bounded task labels, so it is removed with the integrations.
+    var sessionTimeline: URL {
+        applicationSupportDirectory.appendingPathComponent("session-timeline.json")
+    }
+
     var installStatus: URL {
         NotchBotIntegrationFiles.installStatusURL(
             applicationSupportDirectory: applicationSupportDirectory

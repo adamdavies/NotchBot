@@ -2,6 +2,7 @@ import SwiftUI
 
 struct EmptyQueueView: View {
     @ObservedObject var model: ActivityModel
+    @ObservedObject var navigation: PanelNavigationModel
     let onHoverChanged: (Bool) -> Void
 
     var body: some View {
@@ -19,7 +20,7 @@ struct EmptyQueueView: View {
             .padding(.vertical, 12)
             .frame(width: 420, height: 80, alignment: .topLeading)
 
-            QueueProgressFooter(model: model)
+            QueueProgressFooter(model: model, navigation: navigation)
         }
         .frame(width: 420, height: 80 + QueueProgressFooter.height)
         .background {

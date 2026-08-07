@@ -123,6 +123,10 @@ final class IntegrationInstaller: ObservableObject {
             if store.itemExists(at: paths.installStatus), !(try ownership.isOwnedInstallStatus()) {
                 throw IntegrationError.unrelatedManagedFile(paths.installStatus.path)
             }
+            // Checked before anything changes: a timeline destination that has been replaced with a
+            // symlink or another user's file must abort the whole removal rather than leave the
+            // integrations half-removed.
+            let timelineIsRemovable = try store.removableRegularFile(at: paths.sessionTimeline)
 
             if costTrackingEnabled || store.itemExists(at: paths.statusLineState) {
                 try costTracking.disable(updatePlugin: false)
@@ -142,10 +146,21 @@ final class IntegrationInstaller: ObservableObject {
                 try fileManager.removeItem(at: paths.installStatus)
             }
             try ownership.removeLegacyPrivacyPolicyIfOwned()
+            // Removed last, after every ownership check has passed. The timeline is the only managed
+            // file holding task labels, so removing the integrations must take it with them.
+            if timelineIsRemovable {
+                try store.removeRegularFile(at: paths.sessionTimeline)
+            }
             message = "Integrations removed"
             costTrackingEnabled = false
             requiresUpdate = false
             isInstalled = false
+            // Drops the in-memory copy too. Posted only on success, so a failed removal leaves the
+            // rows on screen matching what is still on disk.
+            NotificationCenter.default.post(
+                name: .notchBotIntegrationsRemoved,
+                object: environment.defaults
+            )
         } catch {
             message = "Removal failed: \(error.localizedDescription)"
         }

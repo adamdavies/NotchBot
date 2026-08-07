@@ -1307,3 +1307,457 @@ import Testing
     #expect(claude < openCode)
     #expect(SessionKey(event: AgentEvent(source: .opencode, kind: .working, sessionID: "abc")) == openCode)
 }
+
+// MARK: - Session timeline cycles
+
+private let cycleStart = Date(timeIntervalSince1970: 1_780_000_000)
+
+private func completion(_ sessionID: String, source: AgentSource = .claude, at offset: TimeInterval) -> AgentEvent {
+    AgentEvent(
+        source: source,
+        kind: .attention,
+        sessionID: sessionID,
+        timestamp: cycleStart.addingTimeInterval(offset),
+        reason: source == .claude ? "Claude Code finished working" : "OpenCode finished working"
+    )
+}
+
+@Test func aCycleStartsOnFirstProviderActivityAndIsMeasuredToItsCompletion() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    let change = reducer.apply(completion("s", at: 600))
+
+    let recorded = try? #require(change.completedSessions.first)
+    #expect(change.completedSessions.count == 1)
+    #expect(recorded?.sessionID == "s")
+    #expect(recorded?.startedAt == cycleStart)
+    #expect(recorded?.endedAt == cycleStart.addingTimeInterval(600))
+    #expect(recorded?.duration == 600)
+    #expect(recorded?.groupID == "s")
+    #expect(recorded?.parentSessionID == nil)
+    // No cost metadata was ever seen, so the row carries no cost rather than a zero.
+    #expect(recorded?.costUSD == nil)
+}
+
+@Test func aCompletionWithoutObservedWorkRecordsAZeroDurationCycle() {
+    var reducer = ActivityReducer()
+    let change = reducer.apply(completion("s", at: 30))
+
+    #expect(change.completedSessions.count == 1)
+    #expect(change.completedSessions.first?.duration == 0)
+    #expect(change.completedSessions.first?.startedAt == cycleStart.addingTimeInterval(30))
+}
+
+@Test func repeatedCompletionAttentionRecordsTheCycleOnlyOnce() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    let first = reducer.apply(completion("s", at: 100))
+    let second = reducer.apply(completion("s", at: 200))
+
+    #expect(first.completedSessions.count == 1)
+    #expect(second.completedSessions.isEmpty)
+}
+
+@Test func clearingAnAlreadyCompletedSessionDoesNotRecordItTwice() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(completion("s", at: 100))
+    let cleared = reducer.apply(AgentEvent(
+        source: .claude, kind: .cleared, sessionID: "s", timestamp: cycleStart.addingTimeInterval(200)
+    ))
+
+    #expect(cleared.completedSessions.isEmpty)
+}
+
+@Test func workingAfterACompletionStartsASecondCycleWithItsOwnRow() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    let first = reducer.apply(completion("s", at: 100))
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart.addingTimeInterval(500)
+    ))
+    let second = reducer.apply(completion("s", at: 800))
+
+    #expect(first.completedSessions.first?.startedAt == cycleStart)
+    #expect(second.completedSessions.count == 1)
+    #expect(second.completedSessions.first?.startedAt == cycleStart.addingTimeInterval(500))
+    #expect(second.completedSessions.first?.duration == 300)
+    // Two runs of one session are two rows, not one overwritten row.
+    #expect(first.completedSessions.first?.cycleID != second.completedSessions.first?.cycleID)
+}
+
+@Test func aPermissionRequestDoesNotResetTheCycleStart() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(60),
+        request: AgentRequestUpdate(id: "r1", kind: .permission, state: .opened)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .requestResolved,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(120),
+        request: AgentRequestUpdate(id: "r1", kind: .permission, state: .resolved)
+    ))
+    let change = reducer.apply(completion("s", at: 300))
+
+    #expect(change.completedSessions.first?.startedAt == cycleStart)
+    #expect(change.completedSessions.first?.duration == 300)
+}
+
+@Test func metadataDoesNotResetTheCycleStart() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(60),
+        sessionTitle: "Refactor auth"
+    ))
+    let change = reducer.apply(completion("s", at: 300))
+
+    #expect(change.completedSessions.first?.startedAt == cycleStart)
+    #expect(change.completedSessions.first?.title == "Refactor auth")
+}
+
+@Test func clearingASubagentRecordsItUnderItsParentsGroup() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "parent", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: cycleStart.addingTimeInterval(30)
+    ))
+    let change = reducer.apply(AgentEvent(
+        source: .claude, kind: .cleared, sessionID: "child", timestamp: cycleStart.addingTimeInterval(200)
+    ))
+
+    #expect(change.completedSessions.count == 1)
+    #expect(change.completedSessions.first?.sessionID == "child")
+    #expect(change.completedSessions.first?.parentSessionID == "parent")
+    // The group still points at the live parent, so the two rows join up in Today.
+    #expect(change.completedSessions.first?.groupID == "parent")
+}
+
+@Test func clearingAParentRecordsTheWholeUnarchivedSubtree() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "parent", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: cycleStart.addingTimeInterval(30)
+    ))
+    let change = reducer.apply(AgentEvent(
+        source: .claude, kind: .cleared, sessionID: "parent", timestamp: cycleStart.addingTimeInterval(400)
+    ))
+
+    #expect(Set(change.completedSessions.map(\.sessionID)) == ["parent", "child"])
+    #expect(change.completedSessions.allSatisfy { $0.groupID == "parent" })
+}
+
+@Test func manualDismissalRecordsNothing() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    let change = reducer.dismiss(source: .claude, sessionID: "s", at: cycleStart.addingTimeInterval(100))
+
+    #expect(change.completedSessions.isEmpty)
+    #expect(reducer.sessionCount == 0)
+    // Still guarded against a late provider event resurrecting the row.
+    #expect(!reducer.canApply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart.addingTimeInterval(50)
+    )))
+}
+
+@Test func dismissAllClearsEveryRowWithoutRecordingAny() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "a", timestamp: cycleStart))
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "b", timestamp: cycleStart))
+    let change = reducer.dismissAll(at: cycleStart.addingTimeInterval(10))
+
+    #expect(change.completedSessions.isEmpty)
+    #expect(reducer.sessionCount == 0)
+    #expect(change.state == .idle)
+}
+
+@Test func staleCleanupAndAttentionExpiryRecordNothing() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .attention,
+        sessionID: "s",
+        timestamp: cycleStart,
+        reason: "waiting",
+        expiresAfter: 30
+    ))
+    let expiry = reducer.expireAttention(source: .claude, sessionID: "s", unchangedSince: cycleStart)
+    #expect(expiry.completedSessions.isEmpty)
+
+    reducer.removeSessions(olderThan: cycleStart.addingTimeInterval(3_600))
+    #expect(reducer.sessionCount == 0)
+}
+
+@Test func aDelayedEventForAClearedParentRecordsNothing() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "parent", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .cleared, sessionID: "parent", timestamp: cycleStart.addingTimeInterval(100)
+    ))
+
+    let rejected = reducer.rejectDescendantOfClearedSession(AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: cycleStart.addingTimeInterval(50)
+    ))
+
+    #expect(rejected?.completedSessions.isEmpty == true)
+}
+
+@Test func aCycleRecordsTheCostItAccruedRatherThanTheSessionTotal() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(10),
+        costUSD: 1.25
+    ))
+    let first = reducer.apply(completion("s", at: 100))
+
+    // Second run: the provider keeps reporting a cumulative figure.
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart.addingTimeInterval(200)
+    ))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(210),
+        costUSD: 3.0
+    ))
+    let second = reducer.apply(completion("s", at: 300))
+
+    #expect(first.completedSessions.first?.costUSD == 1.25)
+    // The second cycle is charged only what it added.
+    #expect(second.completedSessions.first?.costUSD == 1.75)
+}
+
+@Test func anObservedZeroCostIsRecordedAsZeroNotAsMissing() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(10),
+        costUSD: 0
+    ))
+    let change = reducer.apply(completion("s", at: 100))
+
+    #expect(change.completedSessions.first?.costUSD == 0)
+}
+
+@Test func aCostGenerationChangeRebasesInsteadOfProducingANegativeDelta() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(10),
+        costUSD: 5.0,
+        costGeneration: "gen-1"
+    ))
+    reducer.apply(completion("s", at: 100))
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart.addingTimeInterval(200)
+    ))
+    // A new generation restarts the provider's running total well below the previous baseline.
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(210),
+        costUSD: 0.75,
+        costGeneration: "gen-2"
+    ))
+    let change = reducer.apply(completion("s", at: 300))
+
+    #expect(change.completedSessions.first?.costUSD == 0.75)
+}
+
+@Test func clearingCostTrackingKeepsLaterRowsFreeOfStaleFigures() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(10),
+        costUSD: 2.0
+    ))
+    reducer.clearCostTracking()
+    let change = reducer.apply(completion("s", at: 100))
+
+    #expect(reducer.activity(source: .claude, sessionID: "s")?.costUSD == nil)
+    #expect(change.completedSessions.first?.costUSD == nil)
+}
+
+@Test func aSubagentCycleCarriesItsOwnTitleAndTiming() {
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "parent", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .working,
+        sessionID: "child",
+        parentSessionID: "parent",
+        timestamp: cycleStart.addingTimeInterval(60),
+        sessionTitle: "migrate-tests"
+    ))
+    let change = reducer.apply(AgentEvent(
+        source: .claude, kind: .cleared, sessionID: "child", timestamp: cycleStart.addingTimeInterval(360)
+    ))
+
+    #expect(change.completedSessions.first?.title == "migrate-tests")
+    #expect(change.completedSessions.first?.startedAt == cycleStart.addingTimeInterval(60))
+    #expect(change.completedSessions.first?.duration == 300)
+}
+
+@Test func aSessionAlreadyRunningAtLaunchIsNotChargedForSpendItNeverWatched() {
+    var reducer = ActivityReducer()
+    // The session had already spent $25.80 before this launch, as the persisted daily-cost
+    // baselines record.
+    reducer.launchCostBaseline = { key in key.sessionID == "resumed" ? 25.80 : nil }
+
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "resumed", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "resumed",
+        timestamp: cycleStart.addingTimeInterval(5),
+        costUSD: 25.95
+    ))
+    let change = reducer.apply(completion("resumed", at: 12))
+
+    // Only the 15 cents that accrued while NotchBot was watching.
+    let cost = change.completedSessions.first?.costUSD ?? -1
+    #expect(abs(cost - 0.15) < 0.000_001)
+    #expect(change.completedSessions.first?.duration == 12)
+}
+
+@Test func aGenuinelyNewSessionHasNoLaunchBaselineAndKeepsItsFullCost() {
+    var reducer = ActivityReducer()
+    reducer.launchCostBaseline = { key in key.sessionID == "resumed" ? 25.80 : nil }
+
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "fresh", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "fresh",
+        timestamp: cycleStart.addingTimeInterval(5),
+        costUSD: 0.40
+    ))
+    let change = reducer.apply(completion("fresh", at: 60))
+
+    #expect(change.completedSessions.first?.costUSD == 0.40)
+}
+
+@Test func seeingACostGenerationForTheFirstTimeKeepsTheLaunchBaseline() {
+    var reducer = ActivityReducer()
+    reducer.launchCostBaseline = { _ in 10.0 }
+
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "s", timestamp: cycleStart))
+    // First sighting of a generation is not a provider restart, so the baseline must survive it.
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(5),
+        costUSD: 12.50,
+        costGeneration: "gen-1"
+    ))
+    let change = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(30),
+        reason: "OpenCode finished working"
+    ))
+
+    #expect(change.completedSessions.first?.costUSD == 2.50)
+}
+
+@Test func aLaunchBaselineAppliesOnlyToTheFirstObservedCycle() {
+    var reducer = ActivityReducer()
+    reducer.launchCostBaseline = { _ in 5.0 }
+
+    reducer.apply(AgentEvent(source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(5),
+        costUSD: 6.0
+    ))
+    let first = reducer.apply(completion("s", at: 60))
+
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "s", timestamp: cycleStart.addingTimeInterval(120)
+    ))
+    reducer.apply(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(125),
+        costUSD: 6.75
+    ))
+    let second = reducer.apply(completion("s", at: 180))
+
+    #expect(first.completedSessions.first?.costUSD == 1.0)
+    // The second cycle rebases onto the running total, not back onto the launch baseline.
+    #expect(second.completedSessions.first?.costUSD == 0.75)
+}
+
+@Test func aCostGenerationChangeStillRebasesAfterALaunchBaseline() {
+    var reducer = ActivityReducer()
+    reducer.launchCostBaseline = { _ in 10.0 }
+
+    reducer.apply(AgentEvent(source: .opencode, kind: .working, sessionID: "s", timestamp: cycleStart))
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(5),
+        costUSD: 11.0,
+        costGeneration: "gen-1"
+    ))
+    // A genuine restart: the running total drops well below both the baseline and the old value.
+    reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .metadata,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(10),
+        costUSD: 0.60,
+        costGeneration: "gen-2"
+    ))
+    let change = reducer.apply(AgentEvent(
+        source: .opencode,
+        kind: .attention,
+        sessionID: "s",
+        timestamp: cycleStart.addingTimeInterval(30),
+        reason: "OpenCode finished working"
+    ))
+
+    #expect(change.completedSessions.first?.costUSD == 0.60)
+}

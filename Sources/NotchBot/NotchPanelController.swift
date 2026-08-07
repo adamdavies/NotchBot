@@ -69,6 +69,8 @@ private final class DisplayPanelController {
     private var cancellables: Set<AnyCancellable> = []
     private let model: ActivityModel
     private let appearance: AppearanceModel
+    /// Per-display, so reading Today on one screen leaves every other screen on the queue.
+    private let navigation = PanelNavigationModel()
 
     init(model: ActivityModel, appearance: AppearanceModel) {
         self.model = model
@@ -96,7 +98,7 @@ private final class DisplayPanelController {
             }
         )
         summaryPanel.contentView = NSHostingView(
-            rootView: HoverDetailView(model: model) { [weak self] hovering in
+            rootView: HoverDetailView(model: model, navigation: navigation) { [weak self] hovering in
                 self?.setSummaryPanelHovered(hovering)
             }
         )
@@ -105,15 +107,29 @@ private final class DisplayPanelController {
             .combineLatest(model.$previewState, model.$previewCoolnessTier)
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _, _ in
-                guard let self else { return }
-                self.updateDetailFrame()
-                if self.summaryPanel.isVisible, !self.hasDetailContent {
-                    self.forceHideDetailPanel()
-                } else if self.hasDetailContent, !self.summaryPanel.isVisible, self.mainPanelHovered {
-                    self.updateSummaryVisibility()
-                }
+                self?.handleContentChange()
             }
             .store(in: &cancellables)
+
+        // Switching page and gaining a completed row both change the card's height, so the panel
+        // frame has to be recalculated for them exactly as it is for queue changes.
+        navigation.$page
+            .map { _ in () }
+            .merge(with: model.$completedSessionsToday.map { _ in () })
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in
+                self?.handleContentChange()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handleContentChange() {
+        updateDetailFrame()
+        if summaryPanel.isVisible, !hasDetailContent {
+            forceHideDetailPanel()
+        } else if hasDetailContent, !summaryPanel.isVisible, mainPanelHovered {
+            updateSummaryVisibility()
+        }
     }
 
     func show(on screen: NSScreen) {
@@ -232,6 +248,7 @@ private final class DisplayPanelController {
             Task { @MainActor in
                 guard let self, !self.mainPanelHovered, !self.summaryPanelHovered else { return }
                 self.summaryPanel.orderOut(nil)
+                self.navigation.reset()
             }
         }
     }
@@ -243,14 +260,26 @@ private final class DisplayPanelController {
     private static let shadowPadding: CGFloat = 50
 
     private var detailSize: NSSize {
-        guard !model.activeSessions.isEmpty else {
-            return NSSize(width: 420, height: 80 + QueueProgressFooter.height)
+        switch navigation.page {
+        case .today:
+            let groups = model.completedSessionsToday
+            return NSSize(
+                width: 420,
+                height: TodayLayout.height(
+                    for: groups,
+                    showsChart: TodaySpendChartData(groups: groups, now: Date()) != nil
+                )
+            )
+        case .queue:
+            guard !model.activeSessions.isEmpty else {
+                return NSSize(width: 420, height: 80 + QueueProgressFooter.height)
+            }
+            let height = model.activeSessions.prefix(5).reduce(CGFloat(42)) { result, session in
+                guard let permission = session.permission else { return result + 71 }
+                return result + (permission.context == nil ? 121 : 151)
+            }
+            return NSSize(width: 420, height: height + QueueProgressFooter.height)
         }
-        let height = model.activeSessions.prefix(5).reduce(CGFloat(42)) { result, session in
-            guard let permission = session.permission else { return result + 71 }
-            return result + (permission.context == nil ? 121 : 151)
-        }
-        return NSSize(width: 420, height: height + QueueProgressFooter.height)
     }
 
     private func updateDetailFrame() {
@@ -285,6 +314,8 @@ private final class DisplayPanelController {
     private func forceHideDetailPanel() {
         hoverTask?.cancel()
         summaryPanelHovered = false
+        // The next hover opens on the live queue rather than wherever this one was left.
+        navigation.reset()
         summaryPanel.contentView?.layer?.removeAllAnimations()
         summaryPanel.alphaValue = 0
         summaryPanel.orderOut(nil)

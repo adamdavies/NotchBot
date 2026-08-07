@@ -7,6 +7,9 @@ import UserNotifications
 extension Notification.Name {
     static let notchBotCostTrackingEnabled = Notification.Name("NotchBotCostTrackingEnabled")
     static let notchBotCostTrackingDisabled = Notification.Name("NotchBotCostTrackingDisabled")
+    /// Posted after the installer's removal transaction succeeds, so the in-memory timeline is
+    /// dropped without writing a fresh file that would undo the removal.
+    static let notchBotIntegrationsRemoved = Notification.Name("NotchBotIntegrationsRemoved")
 }
 
 struct ActivityModelNotificationDependencies {
@@ -46,8 +49,15 @@ final class ActivityModel: ObservableObject {
     @Published private(set) var dailyCostAlertThreshold: Double
     @Published private(set) var activeSessions: [SessionActivity] = []
     @Published private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
+    /// Today's completed cycles, newest group first. Drives the Today view.
+    @Published private(set) var completedSessionsToday: [SessionTimelineGroup] = []
+    /// Set when the timeline could not be written. Persistence failure is deliberately non-fatal:
+    /// the live queue and the in-memory rows keep working, and only surviving a restart is lost.
+    @Published private(set) var timelineStorageError: String?
 
     private var reducer = ActivityReducer()
+    private let timelineStore: SessionTimelineStoring
+    private var timeline: SessionTimelineDocument
     private var coolnessTracker: DailyCoolnessTracker
     private var costTracker: DailyCostTracker
     private var costAlert: DailyCostAlert
@@ -71,6 +81,9 @@ final class ActivityModel: ObservableObject {
         nowProvider: @escaping @MainActor () -> Date = Date.init,
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
         notifications: ActivityModelNotificationDependencies = .live,
+        // `nil` means the live store; it cannot be a default argument because that expression would
+        // be evaluated outside this main-actor initializer.
+        timelineStore: (any SessionTimelineStoring)? = nil,
         enableBackgroundMaintenance: Bool = true
     ) {
         let initialNow = now ?? nowProvider()
@@ -79,7 +92,19 @@ final class ActivityModel: ObservableObject {
         self.nowProvider = nowProvider
         self.sleep = sleep
         self.notifications = notifications
-        coolnessDay = DailyCoolnessPreference.dayIdentifier(for: initialNow, calendar: calendar)
+        let timelineStore = timelineStore ?? SessionTimelineStore.live
+        self.timelineStore = timelineStore
+        let initialDay = DailyCoolnessPreference.dayIdentifier(for: initialNow, calendar: calendar)
+        // Only a document for the current day is adopted; the store discards anything older, so
+        // yesterday's rows never reappear after an overnight restart.
+        var loadFailure: String?
+        do {
+            timeline = try timelineStore.load(day: initialDay) ?? SessionTimelineDocument(day: initialDay)
+        } catch {
+            timeline = SessionTimelineDocument(day: initialDay)
+            loadFailure = error.localizedDescription
+        }
+        coolnessDay = initialDay
         let savedCount = DailyCoolnessPreference.load(from: defaults, now: initialNow, calendar: calendar)
         dailyCompletionCount = savedCount
         coolnessTracker = DailyCoolnessTracker(completionCount: savedCount)
@@ -90,6 +115,15 @@ final class ActivityModel: ObservableObject {
         costAlert = DailyCostAlert(threshold: savedThreshold, hasFired: savedCost.alertFired)
         dailyCostAlertThreshold = savedThreshold
         costTrackingEnabled = defaults.bool(forKey: DailyCostPreference.trackingEnabledKey)
+        completedSessionsToday = timeline.orderedGroups
+        timelineStorageError = loadFailure
+        // A snapshot of the baselines as they stood at launch, deliberately captured by value: a
+        // session already running when NotchBot started must have its first observed cycle measured
+        // from what it had already spent, not from zero.
+        let baselinesAtLaunch = costTracker
+        reducer.launchCostBaseline = { key in
+            baselinesAtLaunch.cumulativeCost(source: key.source, sessionID: key.sessionID)
+        }
         if enableBackgroundMaintenance {
             maintenanceTask = Task { [weak self, sleep] in
                 while !Task.isCancelled {
@@ -102,6 +136,7 @@ final class ActivityModel: ObservableObject {
             installDailyResetObservers()
         }
         installCostTrackingObserver()
+        installIntegrationRemovalObserver()
     }
 
     var displayedRobotState: RobotState {
@@ -165,6 +200,24 @@ final class ActivityModel: ObservableObject {
     var dailyCostThresholdDisplayText: String? {
         guard costAlert.isEnabled else { return nil }
         return String(format: "Alert at $%.2f", costAlert.threshold)
+    }
+
+    /// Whether Today has anything to show. Kept separate from spend so the entry point survives the
+    /// state a user who never enabled cost tracking is always in: completed runs, no tracked spend.
+    var hasTodayHistory: Bool { !completedSessionsToday.isEmpty }
+
+    /// Parents plus subagents — what the header counts as "completed".
+    var todayCompletedRowCount: Int {
+        completedSessionsToday.reduce(0) { $0 + $1.rowCount }
+    }
+
+    /// The footer pill's label, and the way into Today. Falls back to the run count when nothing was
+    /// tracked, because "~$0.00 today" would claim a day of free work rather than an untracked one.
+    var todayPillText: String {
+        guard dailyCostTotal > 0 else {
+            return todayCompletedRowCount == 1 ? "1 run today" : "\(todayCompletedRowCount) runs today"
+        }
+        return dailyCostDisplayText
     }
 
     var dailyCostMenuText: String {
@@ -272,26 +325,22 @@ final class ActivityModel: ObservableObject {
         focusTerminal(for: session)
     }
 
+    /// Dismisses one row. This is deliberately not a synthesized provider `.cleared` event: the user
+    /// tidying the queue is not the provider reporting a session ended, so it records nothing in
+    /// Today. A cycle that already completed stays there, because it was archived on completion.
     func clear(_ session: SessionActivity) {
-        receive(AgentEvent(
-            source: session.source,
-            kind: .cleared,
-            sessionID: session.sessionID,
-            timestamp: nowProvider()
-        ))
+        let now = nowProvider()
+        refreshDailyCoolness(now: now)
+        expiryTasks.removeValue(forKey: session.key)?.cancel()
+        publish(reducer.dismiss(source: session.source, sessionID: session.sessionID, at: now))
     }
 
     func clearAllSessions() {
-        let sessions = activeSessions
-        let timestamp = nowProvider()
-        for session in sessions {
-            receive(AgentEvent(
-                source: session.source,
-                kind: .cleared,
-                sessionID: session.sessionID,
-                timestamp: timestamp
-            ))
-        }
+        let now = nowProvider()
+        refreshDailyCoolness(now: now)
+        for task in expiryTasks.values { task.cancel() }
+        expiryTasks.removeAll()
+        publish(reducer.dismissAll(at: now))
     }
 
     func respond(to permission: AgentPermissionRequest, for session: SessionActivity, with decision: AgentPermissionDecision) {
@@ -399,7 +448,8 @@ final class ActivityModel: ObservableObject {
         publish(change)
     }
 
-    private func performMaintenance(now: Date? = nil) {
+    /// Internal rather than private so the stale-cleanup sweep can be driven directly in tests.
+    func performMaintenance(now: Date? = nil) {
         let now = now ?? nowProvider()
         refreshDailyCoolness(now: now)
         reducer.removeSessions(olderThan: now.addingTimeInterval(-30 * 60))
@@ -427,6 +477,9 @@ final class ActivityModel: ObservableObject {
         costAlert.beginNewDay()
         dailyCostTotal = 0
         saveDailyCost(now: now)
+        // Called before the reducer sees an event, so a session that started yesterday and finishes
+        // after midnight lands in the day it completed rather than the one it began in.
+        resetTimeline(day: currentDay)
     }
 
     private func saveDailyCost(now: Date) {
@@ -484,7 +537,36 @@ final class ActivityModel: ObservableObject {
                 self.dailyCostAlertThreshold = 0
                 // Context percentages live only in the reducer, so republish to take the meters
                 // off screen immediately instead of waiting for the rows to expire.
-                self.publish(self.reducer.clearContextWindowUsage())
+                self.reducer.clearContextWindowUsage()
+                // Dropping live cost availability too, so a figure captured before the opt-out
+                // cannot reach a timeline row written afterwards.
+                self.publish(self.reducer.clearCostTracking())
+                self.scrubTimelineCosts()
+            }
+        })
+    }
+
+    private func installIntegrationRemovalObserver() {
+        calendarObservers.append(NotificationCenter.default.addObserver(
+            forName: .notchBotIntegrationsRemoved,
+            // Scoped to this model's defaults, matching the cost-tracking observers: the installer
+            // that owns those defaults is the only one whose removal this model should react to.
+            object: defaults,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // The installer has already deleted the file as part of its removal transaction.
+                // Only the in-memory copy is dropped here; writing a fresh empty document would
+                // recreate exactly the file the user asked to be removed.
+                self.timeline = SessionTimelineDocument(
+                    day: DailyCoolnessPreference.dayIdentifier(
+                        for: self.nowProvider(),
+                        calendar: self.calendar
+                    )
+                )
+                self.completedSessionsToday = []
+                self.timelineStorageError = nil
             }
         })
     }
@@ -526,6 +608,51 @@ final class ActivityModel: ObservableObject {
         activeAgentCount = reducer.activeCount
         waitingAgentCount = reducer.attentionCount
         activeSessions = reducer.activities
+        record(change.completedSessions)
+    }
+
+    /// Upserts terminal snapshots by cycle ID, so the same cycle reported twice — a repeated
+    /// completion attention, or a clear following a completion — updates one row instead of adding
+    /// a second.
+    private func record(_ completedSessions: [CompletedSession]) {
+        guard !completedSessions.isEmpty else { return }
+        var changed = false
+        for session in completedSessions {
+            if timeline.upsert(session) { changed = true }
+        }
+        guard changed else { return }
+        completedSessionsToday = timeline.orderedGroups
+        persistTimeline()
+    }
+
+    private func persistTimeline() {
+        do {
+            try timelineStore.save(timeline)
+            timelineStorageError = nil
+        } catch {
+            timelineStorageError = error.localizedDescription
+        }
+    }
+
+    /// Clears the timeline in memory and on disk for a new day. Shares `refreshDailyCoolness` with
+    /// the completion count and the daily cost total so all three roll over on exactly one boundary.
+    private func resetTimeline(day: String) {
+        timeline = SessionTimelineDocument(day: day)
+        completedSessionsToday = []
+        do {
+            try timelineStore.removeAll()
+            timelineStorageError = nil
+        } catch {
+            timelineStorageError = error.localizedDescription
+        }
+    }
+
+    /// Matches the clearing of daily cost state on opt-out: figures gathered while tracking was on
+    /// leave the rows already in Today too, instead of lingering there until midnight.
+    private func scrubTimelineCosts() {
+        guard timeline.removeCosts() else { return }
+        completedSessionsToday = timeline.orderedGroups
+        persistTimeline()
     }
 
     private func key(for event: AgentEvent) -> SessionKey {

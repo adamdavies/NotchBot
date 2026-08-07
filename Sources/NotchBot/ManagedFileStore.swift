@@ -45,6 +45,48 @@ struct ManagedFileStore {
         return lstat(url.path, &info) == 0
     }
 
+    /// Unlinks one managed file, never following a symlink and never recursing the way
+    /// `FileManager.removeItem` does. A destination that is not a user-owned regular file is refused
+    /// rather than deleted, so swapping the path for a link cannot redirect the removal elsewhere.
+    /// Returns `false` when there was nothing to remove.
+    @discardableResult
+    func removeRegularFile(at url: URL) throws -> Bool {
+        let parent = url.deletingLastPathComponent()
+        let name = url.lastPathComponent
+        guard !name.isEmpty, name != ".", name != ".." else {
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        let directoryDescriptor = open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directoryDescriptor >= 0 else {
+            if errno == ENOENT { return false }
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        defer { close(directoryDescriptor) }
+        var info = stat()
+        guard fstatat(directoryDescriptor, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+            if errno == ENOENT { return false }
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == getuid() else {
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        guard unlinkat(directoryDescriptor, name, 0) == 0 else {
+            if errno == ENOENT { return false }
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        return true
+    }
+
+    /// Whether `removeRegularFile(at:)` would succeed. Used to validate a destination up front, so a
+    /// transaction that must not half-complete can refuse before it changes anything.
+    func removableRegularFile(at url: URL) throws -> Bool {
+        guard itemExists(at: url) else { return false }
+        guard try regularFile(at: url) else {
+            throw IntegrationError.invalidManagedFile(url.path)
+        }
+        return true
+    }
+
     func fileMode(at url: URL) throws -> Int? {
         let descriptor = try openRegularFile(at: url)
         guard descriptor >= 0 else {
