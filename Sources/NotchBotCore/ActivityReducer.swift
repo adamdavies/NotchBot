@@ -35,6 +35,9 @@ public struct SessionActivity: Equatable, Identifiable, Sendable {
     public var hasProviderActivity: Bool
 
     public var costUSD: Double?
+    /// Latest provider-reported context-window usage, 0...100. Process memory only — it is never
+    /// persisted, so it is absent again after a restart until the provider reports it afresh.
+    public var contextUsedPercentage: Double?
 
     public var key: SessionKey { SessionKey(source: source, sessionID: sessionID) }
     public var id: String { key.rawValue }
@@ -146,8 +149,14 @@ public struct ActivityReducer: Sendable {
                 if let cost = event.costUSD, cost >= 0 {
                     sessions[key]?.costUSD = cost
                 }
+                // Presence is the signal: a present update replaces the percentage even when its
+                // value is nil, which is how compaction retracts a figure that no longer holds.
+                if let contextWindow = event.contextWindow {
+                    sessions[key]?.contextUsedPercentage = contextWindow.usedPercentage
+                }
             } else if parentClearedAt == nil
-                && (appliesSessionTitle || appliesActivity || parentSessionID != nil || event.costUSD != nil) {
+                && (appliesSessionTitle || appliesActivity || parentSessionID != nil
+                    || event.costUSD != nil || event.contextWindow != nil) {
                 if pendingMetadata[key] == nil, pendingMetadata.count >= Self.maximumSessions,
                    let oldest = pendingMetadata.min(by: { $0.value.updatedAt < $1.value.updatedAt })?.key {
                     pendingMetadata.removeValue(forKey: oldest)
@@ -162,6 +171,8 @@ public struct ActivityReducer: Sendable {
                         ? event.activityDescription : pendingMetadata[key]?.activityDescription,
                     parentSessionID: parentSessionID ?? pendingMetadata[key]?.parentSessionID,
                     costUSD: [event.costUSD, pendingMetadata[key]?.costUSD].compactMap { $0 }.max(),
+                    contextUsedPercentage: event.contextWindow.map { $0.usedPercentage }
+                        ?? pendingMetadata[key]?.contextUsedPercentage,
                     updatedAt: event.timestamp
                 )
             }
@@ -256,7 +267,9 @@ public struct ActivityReducer: Sendable {
                 providerReason: providerReason,
                 providerUpdatedAt: providerUpdatedAt,
                 hasProviderActivity: hasProviderActivity,
-                costUSD: previousSession?.costUSD ?? pendingMetadata[key]?.costUSD
+                costUSD: previousSession?.costUSD ?? pendingMetadata[key]?.costUSD,
+                contextUsedPercentage: previousSession?.contextUsedPercentage
+                    ?? pendingMetadata[key]?.contextUsedPercentage
             )
             pendingMetadata.removeValue(forKey: key)
         }
@@ -323,6 +336,20 @@ public struct ActivityReducer: Sendable {
         }
         let current = primarySession
         return ActivityChange(state: current?.state ?? .idle, primarySession: current, shouldNotify: false)
+    }
+
+    /// Drops every context percentage, live and pending. Called when the user turns usage and cost
+    /// tracking off: the figures must leave the UI at once rather than lingering until the sessions
+    /// that produced them expire.
+    @discardableResult
+    public mutating func clearContextWindowUsage() -> ActivityChange {
+        for key in sessions.keys {
+            sessions[key]?.contextUsedPercentage = nil
+        }
+        for key in pendingMetadata.keys {
+            pendingMetadata[key]?.contextUsedPercentage = nil
+        }
+        return currentChange()
     }
 
     @discardableResult
@@ -616,6 +643,7 @@ private struct PendingMetadata: Sendable {
     let activityDescription: String?
     let parentSessionID: String?
     let costUSD: Double?
+    var contextUsedPercentage: Double?
     let updatedAt: Date
 }
 

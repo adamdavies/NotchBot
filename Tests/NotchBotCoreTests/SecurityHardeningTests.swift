@@ -219,6 +219,86 @@ import Testing
     }
 }
 
+@Test func contextWindowUsageIsStrictlyValidated() throws {
+    for source in [AgentSource.claude, .opencode] {
+        for percentage in [0.0, 49.9, 50, 74.9, 100] {
+            try AgentEventValidator.validate(AgentEvent(
+                source: source,
+                kind: .metadata,
+                sessionID: "session",
+                contextWindow: ContextWindowUsageUpdate(usedPercentage: percentage)
+            ))
+        }
+        // An explicit retraction is always well-formed.
+        try AgentEventValidator.validate(AgentEvent(
+            source: source,
+            kind: .metadata,
+            sessionID: "session",
+            contextWindow: .unavailable
+        ))
+    }
+
+    for percentage in [-0.1, 100.1, .infinity, .nan, -.infinity] as [Double] {
+        #expect(throws: AgentEventValidationError.invalidContextWindow) {
+            try AgentEventValidator.validate(AgentEvent(
+                source: .claude,
+                kind: .metadata,
+                sessionID: "session",
+                contextWindow: ContextWindowUsageUpdate(usedPercentage: percentage)
+            ))
+        }
+    }
+}
+
+@Test func contextWindowUsageIsRejectedOnPreviewAndLifecycleEvents() {
+    for kind in [AgentEventKind.working, .attention, .cleared] {
+        #expect(throws: AgentEventValidationError.invalidContextWindow) {
+            try AgentEventValidator.validate(AgentEvent(
+                source: .opencode,
+                kind: kind,
+                sessionID: "session",
+                contextWindow: ContextWindowUsageUpdate(usedPercentage: 50)
+            ))
+        }
+    }
+    #expect(throws: AgentEventValidationError.invalidContextWindow) {
+        try AgentEventValidator.validate(
+            AgentEvent(
+                source: .preview,
+                kind: .metadata,
+                sessionID: "session",
+                contextWindow: ContextWindowUsageUpdate(usedPercentage: 50)
+            ),
+            allowPreview: true
+        )
+    }
+}
+
+/// The three states have to survive a JSON round trip, because absent and present-with-nil mean
+/// opposite things to the reducer and both encode to something that looks empty.
+@Test func contextWindowUpdateRoundTripsItsThreeStates() throws {
+    func roundTrip(_ event: AgentEvent) throws -> AgentEvent {
+        try JSONDecoder().decode(AgentEvent.self, from: JSONEncoder().encode(event))
+    }
+
+    let absent = try roundTrip(AgentEvent(source: .claude, kind: .metadata, sessionID: "s"))
+    #expect(absent.contextWindow == nil)
+
+    let cleared = try roundTrip(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "s", contextWindow: .unavailable
+    ))
+    #expect(cleared.contextWindow != nil)
+    #expect(cleared.contextWindow?.usedPercentage == nil)
+
+    let set = try roundTrip(AgentEvent(
+        source: .claude,
+        kind: .metadata,
+        sessionID: "s",
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 82)
+    ))
+    #expect(set.contextWindow?.usedPercentage == 82)
+}
+
 @Test func replayProtectionIsBoundedAndRejectsDuplicates() {
     var replay = ReplayProtection(capacity: 2)
     let first = replay.accept(Data([1]))

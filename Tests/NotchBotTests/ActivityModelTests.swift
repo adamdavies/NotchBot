@@ -496,6 +496,81 @@ private func drainScheduledTasks() async {
     #expect(fixture.notifications.sent.count == 1)
 }
 
+@Test @MainActor func contextUsageReachesActiveSessionsAndIsNeverPersisted() throws {
+    let fixture = try makeModelFixture()
+    defer { fixture.cleanup() }
+
+    fixture.model.receive(AgentEvent(
+        source: .claude, kind: .working, sessionID: "session", timestamp: fixture.clock.now
+    ))
+    fixture.model.receive(contextEvent(
+        session: "session", percentage: 82, at: fixture.clock.now.addingTimeInterval(1)
+    ))
+    #expect(fixture.model.activeSessions.first?.contextUsedPercentage == 82)
+
+    // Usage is process memory only: nothing about it may reach the defaults suite.
+    let persisted = fixture.defaults.dictionaryRepresentation()
+    #expect(!persisted.keys.contains { $0.lowercased().contains("context") })
+
+    fixture.model.shutdown()
+    let restarted = ActivityModel(
+        defaults: fixture.defaults,
+        calendar: fixture.calendar,
+        nowProvider: { [clock = fixture.clock] in clock.now },
+        notifications: fixture.notifications.dependencies
+    )
+    defer { restarted.shutdown() }
+    #expect(restarted.activeSessions.isEmpty)
+}
+
+@Test @MainActor func disablingTrackingTakesContextMetersOffScreenImmediately() async throws {
+    let fixture = try makeModelFixture()
+    defer { fixture.cleanup() }
+
+    fixture.model.receive(AgentEvent(
+        source: .opencode, kind: .working, sessionID: "session", timestamp: fixture.clock.now
+    ))
+    fixture.model.receive(contextEvent(
+        session: "session", percentage: 91, at: fixture.clock.now.addingTimeInterval(1),
+        source: .opencode
+    ))
+    #expect(fixture.model.activeSessions.first?.contextUsedPercentage == 91)
+
+    fixture.defaults.set(false, forKey: DailyCostPreference.trackingEnabledKey)
+    NotificationCenter.default.post(
+        name: .notchBotCostTrackingDisabled,
+        object: fixture.defaults
+    )
+    await drainScheduledTasks()
+
+    // The row survives; only the percentage goes.
+    #expect(fixture.model.activeSessions.count == 1)
+    #expect(fixture.model.activeSessions.first?.contextUsedPercentage == nil)
+
+    // A provider session that has not restarted can still run the previously loaded integration.
+    // Its late metadata must not restore context presentation after the user opted out.
+    fixture.model.receive(contextEvent(
+        session: "session", percentage: 95, at: fixture.clock.now.addingTimeInterval(2),
+        source: .opencode
+    ))
+    #expect(fixture.model.activeSessions.first?.contextUsedPercentage == nil)
+}
+
+private func contextEvent(
+    session: String,
+    percentage: Double?,
+    at timestamp: Date,
+    source: AgentSource = .claude
+) -> AgentEvent {
+    AgentEvent(
+        source: source,
+        kind: .metadata,
+        sessionID: session,
+        timestamp: timestamp,
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: percentage)
+    )
+}
+
 @MainActor
 private func costEvent(session: String, cost: Double, at timestamp: Date) -> AgentEvent {
     AgentEvent(

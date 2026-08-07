@@ -107,8 +107,8 @@ private struct NotchBotMenu: View {
                 }
                 notificationButton
                 Button(integrations.costTrackingEnabled
-                    ? "Disable Cost Tracking"
-                    : "Enable Cost Tracking"
+                    ? "Disable Usage & Cost Tracking"
+                    : "Enable Usage & Cost Tracking"
                 ) {
                     if integrations.costTrackingEnabled {
                         integrations.disableCostTracking()
@@ -167,8 +167,8 @@ private struct NotchBotMenu: View {
         Task { @MainActor in
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
-            alert.messageText = "Enable estimated cost tracking?"
-            alert.informativeText = "NotchBot will collect estimated session costs from OpenCode and wrap your Claude Code status line command to read its session cost estimate. Your existing status line configuration (if any) will continue to work and will be restored when tracking is disabled.\n\nCost estimates are based on provider pricing and may not reflect enterprise discounts or subscription allowances."
+            alert.messageText = "Enable usage and cost tracking?"
+            alert.informativeText = "NotchBot will show estimated session costs and context-window usage.\n\nFor Claude Code, NotchBot wraps your status line command to read the session cost estimate and the context percentage Claude already reports. Your existing status line configuration (if any) will continue to work and will be restored when tracking is disabled.\n\nFor OpenCode, the NotchBot plugin reads session costs and calculates the same context percentage OpenCode shows in its own sidebar. Only the final percentage reaches NotchBot — token counts, context limits, and model details are not forwarded or stored.\n\nContext percentages are kept in memory only and are gone when NotchBot quits. Cost estimates are based on provider pricing and may not reflect enterprise discounts or subscription allowances."
             alert.alertStyle = .informational
             alert.addButton(withTitle: "Enable")
             alert.addButton(withTitle: "Cancel")

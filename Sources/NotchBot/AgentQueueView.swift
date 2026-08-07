@@ -89,8 +89,87 @@ struct AgentQueueView: View {
 
     private func rowHeight(for session: SessionActivity) -> CGFloat {
         let activityHeight: CGFloat = session.activityDescription == nil ? 0 : 20
-        guard let permission = session.permission else { return 70 + activityHeight }
-        return (permission.context == nil ? 120 : 150) + activityHeight
+        // Reserved only when the meter is actually drawn, so rows below the threshold keep their
+        // current height and the panel does not grow for sessions with plenty of context left.
+        let meterHeight: CGFloat = ContextMeter.isVisible(session.contextUsedPercentage)
+            ? ContextMeter.addedRowHeight : 0
+        guard let permission = session.permission else { return 70 + activityHeight + meterHeight }
+        return (permission.context == nil ? 120 : 150) + activityHeight + meterHeight
+    }
+}
+
+/// Presentation rules for the per-row context-window meter.
+///
+/// The meter stays hidden below `visibilityThreshold`. A near-empty bar on every idle row would
+/// cost vertical space in a panel that shows five rows at a time to say nothing actionable, so the
+/// meter appears only once context is worth watching. Geometry and colours follow
+/// `Design/NotchBot Panel.dc.html`; the strong-warning band is derived, as noted in `Design/README.md`.
+enum ContextMeter {
+    static let visibilityThreshold: Double = 50
+    static let warningThreshold: Double = 75
+    static let strongWarningThreshold: Double = 90
+
+    /// 6pt VStack spacing + 2pt top inset + 11pt content.
+    static let addedRowHeight: CGFloat = 19
+    static let barHeight: CGFloat = 3
+    static let contentHeight: CGFloat = 11
+
+    static func isVisible(_ percentage: Double?) -> Bool {
+        guard let percentage, percentage.isFinite else { return false }
+        return percentage >= visibilityThreshold
+    }
+
+    static func tint(for percentage: Double) -> Color {
+        if percentage >= strongWarningThreshold {
+            return Color(red: 0.885, green: 0.285, blue: 0.280)
+        }
+        if percentage >= warningThreshold {
+            return Color(red: 0.958, green: 0.499, blue: 0.276)
+        }
+        return Color(red: 0.298, green: 0.620, blue: 0.637)
+    }
+
+    /// The bar uses the unrounded value; only the text rounds, so a 74.6 reading cannot show "75%"
+    /// next to a fill that is still in the neutral band.
+    static func fillFraction(for percentage: Double) -> Double {
+        min(1, max(0, percentage / 100))
+    }
+
+    static func label(for percentage: Double) -> String {
+        "\(Int(percentage.rounded()))% ctx"
+    }
+
+    static func accessibilityValue(for percentage: Double) -> String {
+        "\(Int(percentage.rounded()))% context used"
+    }
+}
+
+private struct ContextMeterView: View {
+    let percentage: Double
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Capsule()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: ContextMeter.barHeight)
+                .overlay(alignment: .leading) {
+                    GeometryReader { proxy in
+                        Capsule()
+                            .fill(ContextMeter.tint(for: percentage))
+                            .frame(width: proxy.size.width * ContextMeter.fillFraction(for: percentage))
+                    }
+                }
+            Text(ContextMeter.label(for: percentage))
+                .font(.system(size: 9, design: .rounded))
+                .foregroundStyle(.white.opacity(0.35))
+                .fixedSize()
+        }
+        .frame(height: ContextMeter.contentHeight)
+        .padding(.top, 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Context window")
+        .accessibilityValue(ContextMeter.accessibilityValue(for: percentage))
+        .help(ContextMeter.accessibilityValue(for: percentage))
     }
 }
 
@@ -176,6 +255,11 @@ private struct AgentQueueRow: View {
             .foregroundStyle(.white.opacity(0.55))
             .lineLimit(1)
             .padding(.leading, session.isSubagent ? 28 : 18)
+
+            if let percentage = session.contextUsedPercentage, ContextMeter.isVisible(percentage) {
+                ContextMeterView(percentage: percentage)
+                    .padding(.leading, session.isSubagent ? 28 : 18)
+            }
 
             if let permission = session.permission {
                 Text(permission.summary)

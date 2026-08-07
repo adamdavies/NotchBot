@@ -184,6 +184,9 @@ final class ActivityModel: ObservableObject {
         let now = nowProvider()
         refreshDailyCoolness(now: now)
         guard (try? AgentEventValidator.validate(event, now: now)) != nil else { return }
+        // Provider sessions already running when tracking is disabled may retain the old
+        // integration until restart. Drop their late usage metadata before it can restore a meter.
+        guard costTrackingEnabled || event.contextWindow == nil else { return }
         if event.kind == .requestResolved, let identifier = notificationIdentifier(for: event) {
             notifications.resolve(identifier)
         }
@@ -479,6 +482,9 @@ final class ActivityModel: ObservableObject {
                 self.costAlert = DailyCostAlert()
                 self.dailyCostTotal = 0
                 self.dailyCostAlertThreshold = 0
+                // Context percentages live only in the reducer, so republish to take the meters
+                // off screen immediately instead of waiting for the rows to expire.
+                self.publish(self.reducer.clearContextWindowUsage())
             }
         })
     }

@@ -4,35 +4,83 @@ import Foundation
 /// syntax-checked as JavaScript. `Tools/check-plugin-js.sh` runs `node --check` over the
 /// generated output; edit the template here rather than assembling JS in `OpenCodePlugin`.
 enum OpenCodePluginSource {
-    static let costState = """
+    static let usageState = """
     const costGeneration = crypto.randomUUID()
     const sessionCosts = new Map()
     const messageCosts = new Map()
+    const sessionContextLimits = new Map()
+    const sessionContextPercentages = new Map()
     """
 
-    static let costPayload = """
-      if (cost) {
-        if (typeof cost.costUSD === "number" && cost.costUSD >= 0) payload.cost_usd = cost.costUSD
-        payload.cost_generation = costGeneration
+    static let usagePayload = """
+      if (usage) {
+        if (typeof usage.costUSD === "number" && usage.costUSD >= 0) {
+          payload.cost_usd = usage.costUSD
+          payload.cost_generation = costGeneration
+        }
+        if (usage.contextWindow !== undefined) {
+          payload.context_window = usage.contextWindow === null
+            ? {}
+            : { used_percentage: usage.contextWindow }
+        }
       }
     """
 
-    static let costEvent = """
-        if (event.type === "message.updated") {
-          const message = properties.info
-          const sid = identifier(message?.sessionID)
-          const messageID = identifier(message?.id)
-          if (!sid || !messageID || message?.role !== "assistant") return
-          const cost = typeof message.cost === "number" && Number.isFinite(message.cost) && message.cost >= 0
-            ? message.cost
-            : null
-          if (cost == null) return
-          const messageKey = JSON.stringify([sid, messageID])
-          const previous = messageCosts.get(messageKey) ?? 0
-          if (cost === previous) return
-          if (!setCostBaseline(messageCosts, messageKey, cost)) return
-          const sessionCost = Math.max(0, (sessionCosts.get(sid) ?? 0) + cost - previous)
-          if (!setCostBaseline(sessionCosts, sid, sessionCost)) return
+    /// Context-usage helpers. `usageComponent` treats an absent token field as zero so a model
+    /// that reports no reasoning or cache tokens still yields a usable total, but rejects a field
+    /// that is present and unusable — that is a malformed payload, not an empty one.
+    static let usageHelpers = """
+    function usageComponent(value) {
+      if (value === undefined || value === null) return 0
+      return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : NaN
+    }
+
+    // Returns undefined for "no authoritative update", null for "clear the stored percentage",
+    // or a bounded integer percentage. Mirrors the sum OpenCode's own sidebar displays.
+    function contextPercentage(sessionID, tokens) {
+      if (!tokens || typeof tokens !== "object") return undefined
+      const output = usageComponent(tokens.output)
+      // OpenCode only treats a response as measurable once it has produced output; earlier
+      // streaming updates would otherwise report a percentage that immediately jumps.
+      if (!Number.isFinite(output) || output <= 0) return undefined
+      const total = output
+        + usageComponent(tokens.input)
+        + usageComponent(tokens.reasoning)
+        + usageComponent(tokens.cache?.read)
+        + usageComponent(tokens.cache?.write)
+      if (!Number.isFinite(total)) return null
+      const limit = sessionContextLimits.get(sessionID)
+      if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) return null
+      const percentage = Math.round((total / limit) * 100)
+      if (!Number.isFinite(percentage)) return null
+      // OpenCode can display over 100; NotchBot's meter domain is explicitly bounded.
+      return Math.min(100, Math.max(0, percentage))
+    }
+
+    // Applies the dedup rule and reports what, if anything, should go on the wire.
+    function contextUpdateFor(sessionID, tokens) {
+      const derived = contextPercentage(sessionID, tokens)
+      if (derived === undefined) return undefined
+      const previous = sessionContextPercentages.get(sessionID)
+      if (derived === null) {
+        if (previous === undefined) return undefined
+        sessionContextPercentages.delete(sessionID)
+        return null
+      }
+      if (derived === previous) return undefined
+      setBounded(sessionContextPercentages, sessionID, derived)
+      return derived
+    }
+
+    """
+
+    static let usageEvent = """
+        if (event.type === "session.compacted" || event.type === "message.removed") {
+          // Both invalidate the last derived percentage. The next completed assistant response
+          // establishes the new one; until then a retained figure would be wrong, not merely old.
+          const sid = identifier(properties.sessionID ?? properties.info?.sessionID)
+          if (!sid || !sessionContextPercentages.has(sid)) return
+          sessionContextPercentages.delete(sid)
           send(
             "metadata",
             sid,
@@ -43,15 +91,65 @@ enum OpenCodePluginSource {
             sessionTitles.get(sid) ?? fallbackSessionTitle,
             sessionActivities.get(sid),
             null,
-            { costUSD: sessionCost },
+            { contextWindow: null },
+          )
+          return
+        }
+
+        if (event.type === "message.updated") {
+          const message = properties.info
+          const sid = identifier(message?.sessionID)
+          const messageID = identifier(message?.id)
+          if (!sid || !messageID || message?.role !== "assistant") return
+          const cost = typeof message.cost === "number" && Number.isFinite(message.cost) && message.cost >= 0
+            ? message.cost
+            : null
+          // Cost and context are deduplicated independently: an unchanged cost must not suppress
+          // a moved percentage, and an unchanged percentage must not suppress a new cost.
+          let sessionCost = null
+          if (cost != null) {
+            const messageKey = JSON.stringify([sid, messageID])
+            const previous = messageCosts.get(messageKey) ?? 0
+            if (cost !== previous && setCostBaseline(messageCosts, messageKey, cost)) {
+              const updated = Math.max(0, (sessionCosts.get(sid) ?? 0) + cost - previous)
+              if (setCostBaseline(sessionCosts, sid, updated)) sessionCost = updated
+            }
+          }
+          const contextWindow = contextUpdateFor(sid, message.tokens)
+          if (sessionCost == null && contextWindow === undefined) return
+          send(
+            "metadata",
+            sid,
+            sessionParents.get(sid),
+            null,
+            directory,
+            null,
+            sessionTitles.get(sid) ?? fallbackSessionTitle,
+            sessionActivities.get(sid),
+            null,
+            { costUSD: sessionCost, contextWindow },
           )
           return
         }
 
     """
 
-    static let costCleanup = """
+    /// Captures the model context limit for a session. Only the numeric limit is read, and
+    /// `output` is returned untouched so the plugin never influences the request.
+    static let usageParams = """
+      "chat.params": async (input, _output) => {
+        const sid = identifier(input?.sessionID)
+        const limit = input?.model?.limit?.context
+        if (!sid || typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) return
+        setBounded(sessionContextLimits, sid, limit)
+      },
+
+    """
+
+    static let usageCleanup = """
           sessionCosts.delete(sessionID)
+          sessionContextLimits.delete(sessionID)
+          sessionContextPercentages.delete(sessionID)
           for (const key of messageCosts.keys()) {
             if (JSON.parse(key)[0] === sessionID) messageCosts.delete(key)
           }
@@ -64,7 +162,7 @@ enum OpenCodePluginSource {
     const sessionTitleTimestamps = new Map()
     const sessionActivities = new Map()
     const sessionActivityTimestamps = new Map()
-    {{COST_STATE}}
+    {{USAGE_STATE}}
     const sessionParents = new Map()
     const deletedSessions = new Set()
     const completedSessions = new Set()
@@ -108,6 +206,7 @@ enum OpenCodePluginSource {
       return true
     }
 
+    {{USAGE_HELPERS}}
     function nativeRequestID(properties) {
       return identifier(properties.id ?? properties.requestID ?? properties.permissionID)
     }
@@ -204,7 +303,7 @@ enum OpenCodePluginSource {
       return patterns.some((pattern) => permissionText(pattern) === context) ? null : context
     }
 
-    function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, sessionTitle, activityDescription, request, cost) {
+    function send(kind, sessionID, parentSessionID, reason, directory, expiresAfter, sessionTitle, activityDescription, request, usage) {
       sessionID = identifier(sessionID)
       if (!sessionID) return
       parentSessionID = identifier(parentSessionID)
@@ -223,7 +322,7 @@ enum OpenCodePluginSource {
         payload.request_kind = request.kind
         payload.request_state = request.state
       }
-    {{COST_PAYLOAD}}
+    {{USAGE_PAYLOAD}}
       sendQueue = sendQueue.then(async () => {
         try {
           const child = Bun.spawn(args, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
@@ -394,9 +493,10 @@ enum OpenCodePluginSource {
         }
       }
       return {
+    {{USAGE_PARAMS}}
       event: async ({ event }) => {
         const properties = event.properties ?? {}
-    {{COST_EVENT}}
+    {{USAGE_EVENT}}
         const sessionID = identifier(
           event.type === "message.part.updated"
             ? properties.part?.sessionID
@@ -450,7 +550,7 @@ enum OpenCodePluginSource {
           sessionTitleTimestamps.delete(sessionID)
           sessionActivities.delete(sessionID)
           sessionActivityTimestamps.delete(sessionID)
-    {{COST_CLEANUP}}
+    {{USAGE_CLEANUP}}
           sessionParents.delete(sessionID)
           completedSessions.delete(sessionID)
           for (const [key, requestSessionID] of knownRequests) {

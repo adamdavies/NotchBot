@@ -36,6 +36,22 @@ public struct AgentRequestUpdate: Codable, Equatable, Sendable {
     }
 }
 
+/// A provider's report of how much of the model context window a session has consumed.
+///
+/// Presence carries meaning. An absent update on an event leaves the current percentage
+/// alone; a present update replaces it, and a present update whose percentage is `nil`
+/// clears it. That third state is what lets compaction, message removal, and session
+/// deletion retract a figure that is no longer true instead of leaving a stale one on screen.
+public struct ContextWindowUsageUpdate: Codable, Equatable, Sendable {
+    public let usedPercentage: Double?
+
+    public init(usedPercentage: Double?) {
+        self.usedPercentage = usedPercentage
+    }
+
+    public static let unavailable = Self(usedPercentage: nil)
+}
+
 public struct AgentPermissionRequest: Codable, Equatable, Sendable {
     public static let maximumSummaryCharacters = 240
     public static let maximumSummaryBytes = 1_024
@@ -91,6 +107,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
     public let request: AgentRequestUpdate?
     public let costUSD: Double?
     public let costGeneration: String?
+    public let contextWindow: ContextWindowUsageUpdate?
 
     public init(
         source: AgentSource,
@@ -108,7 +125,8 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         permission: AgentPermissionRequest? = nil,
         request: AgentRequestUpdate? = nil,
         costUSD: Double? = nil,
-        costGeneration: String? = nil
+        costGeneration: String? = nil,
+        contextWindow: ContextWindowUsageUpdate? = nil
     ) {
         self.version = Self.protocolVersion
         self.source = source
@@ -127,6 +145,7 @@ public struct AgentEvent: Codable, Equatable, Sendable {
         self.request = request
         self.costUSD = costUSD
         self.costGeneration = costGeneration
+        self.contextWindow = contextWindow
     }
 
     public var isCompletionAttention: Bool {
@@ -155,6 +174,7 @@ public enum AgentEventValidationError: Error, Equatable, Sendable {
     case invalidPermission
     case invalidRequest
     case invalidCost
+    case invalidContextWindow
 }
 
 public enum AgentEventValidator {
@@ -228,6 +248,20 @@ public enum AgentEventValidator {
         if let generation = event.costGeneration {
             guard event.costUSD != nil, validIdentifier(generation) else {
                 throw AgentEventValidationError.invalidCost
+            }
+        }
+        if let contextWindow = event.contextWindow {
+            // Only the two real providers report usage, and only on metadata. Lifecycle events
+            // and preview events carrying a percentage are malformed, not merely uninteresting.
+            guard event.kind == .metadata, event.source != .preview else {
+                throw AgentEventValidationError.invalidContextWindow
+            }
+            if let percentage = contextWindow.usedPercentage {
+                // Rejected rather than clamped: OpenCode does its own intentional clamp before
+                // building the payload, so an out-of-range value here means a malformed sender.
+                guard percentage.isFinite, (0...100).contains(percentage) else {
+                    throw AgentEventValidationError.invalidContextWindow
+                }
             }
         }
     }

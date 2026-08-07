@@ -55,7 +55,7 @@ import Testing
     #expect(try String(contentsOf: fixture.helperOwnershipURL, encoding: .utf8)
         == NotchBotIntegrationFiles.helperOwnershipMarker)
     let status = try JSONDecoder().decode(IntegrationInstallStatus.self, from: Data(contentsOf: fixture.installStatusURL))
-    #expect(status.version == 19)
+    #expect(status.version == 20)
 }
 
 @MainActor
@@ -72,12 +72,12 @@ import Testing
     installer.install()
 
     installer.enableCostTracking()
-    #expect(installer.message == "Cost tracking enabled")
+    #expect(installer.message == "Usage and cost tracking enabled")
     let enabledStatusLine = try #require(try fixture.settings()["statusLine"] as? [String: Any])
     #expect(enabledStatusLine["command"] as? String != originalStatusLine["command"] as? String)
 
     installer.disableCostTracking()
-    #expect(installer.message == "Cost tracking disabled")
+    #expect(installer.message == "Usage and cost tracking disabled")
     let restored = try #require(try fixture.settings()["statusLine"] as? [String: Any])
     #expect(NSDictionary(dictionary: restored).isEqual(to: originalStatusLine))
     #expect(try fixture.settings()["custom"] as? Bool == true)

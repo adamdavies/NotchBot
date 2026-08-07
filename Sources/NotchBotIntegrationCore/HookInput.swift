@@ -15,6 +15,17 @@ public enum HookInputError: Error, Equatable {
     case invalidJSON
 }
 
+/// A provider's context-window report as it arrives at the helper.
+///
+/// `nil` at the call site means the payload said nothing about usage and the app should keep
+/// whatever it already has. `.unavailable` is an explicit retraction — the provider told us the
+/// old figure no longer applies (compaction, a removed message, a response with no usable
+/// context limit) and a stale percentage would be worse than none.
+public enum ContextWindowUsage: Equatable, Sendable {
+    case unavailable
+    case percentage(Double)
+}
+
 public enum HookInput {
     public static let maximumByteCount = 64 * 1_024
 
@@ -99,8 +110,21 @@ public enum HookInput {
             requestKind: decoded.requestKind,
             requestState: decoded.requestState,
             costUSD: costUSD,
-            costGeneration: try validatedIdentifier(decoded.costGeneration)
+            costGeneration: try validatedIdentifier(decoded.costGeneration),
+            contextWindow: contextWindowUsage(decoded.contextWindow)
         )
+    }
+
+    /// Maps the generated plugin's nested `context_window` object onto the three-state update.
+    /// Only `used_percentage` is read, so token counts or model details sitting alongside it in a
+    /// malformed payload are ignored rather than forwarded. A present-but-unusable number is
+    /// treated as a retraction: we know the old figure is suspect and we have nothing to replace
+    /// it with.
+    private static func contextWindowUsage(_ value: ContextWindowJSON?) -> ContextWindowUsage? {
+        guard let value else { return nil }
+        guard let percentage = value.usedPercentage,
+              percentage.isFinite, (0...100).contains(percentage) else { return .unavailable }
+        return .percentage(percentage)
     }
 
     public static func sessionTitle(from payload: HookPayload?, source: String) -> String? {
@@ -196,6 +220,18 @@ public struct HookPayload: Equatable, Sendable {
     public let requestState: String?
     public let costUSD: Double?
     public let costGeneration: String?
+    public let contextWindow: ContextWindowUsage?
+}
+
+/// Shared shape for both provider paths: Claude's status line and the generated OpenCode plugin
+/// each nest the final percentage under `context_window.used_percentage`. An object with no
+/// percentage is the wire form of an explicit retraction.
+private struct ContextWindowJSON: Decodable {
+    let usedPercentage: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case usedPercentage = "used_percentage"
+    }
 }
 
 private struct BasicPayload: Decodable {
@@ -216,6 +252,7 @@ private struct BasicPayload: Decodable {
     let requestState: String?
     let costUSD: Double?
     let costGeneration: String?
+    let contextWindow: ContextWindowJSON?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -235,6 +272,7 @@ private struct BasicPayload: Decodable {
         case requestState = "request_state"
         case costUSD = "cost_usd"
         case costGeneration = "cost_generation"
+        case contextWindow = "context_window"
     }
 
     struct ToolInput: Decodable {
@@ -245,11 +283,13 @@ private struct BasicPayload: Decodable {
 public struct StatusLinePayload: Equatable, Sendable {
     public let sessionID: String?
     public let costUSD: Double?
+    public let contextWindow: ContextWindowUsage?
 }
 
 private struct StatusLineJSON: Decodable {
     let sessionID: String?
     let cost: StatusLineCost?
+    let contextWindow: ContextWindowJSON?
 
     struct StatusLineCost: Decodable {
         let totalCostUSD: Double?
@@ -261,6 +301,7 @@ private struct StatusLineJSON: Decodable {
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
         case cost
+        case contextWindow = "context_window"
     }
 }
 
@@ -274,7 +315,10 @@ extension HookInput {
         let costUSD = decoded.cost?.totalCostUSD.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
         return StatusLinePayload(
             sessionID: try validatedIdentifier(decoded.sessionID),
-            costUSD: costUSD
+            costUSD: costUSD,
+            // Older Claude builds omit `context_window` entirely; that stays a no-update rather
+            // than clearing a percentage a newer session already reported.
+            contextWindow: contextWindowUsage(decoded.contextWindow)
         )
     }
 }

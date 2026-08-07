@@ -124,7 +124,8 @@ public enum HookRunner {
         } catch {
             return 65
         }
-        guard let statusLinePayload, statusLinePayload.costUSD != nil else { return 0 }
+        guard let statusLinePayload,
+              statusLinePayload.costUSD != nil || statusLinePayload.contextWindow != nil else { return 0 }
         let sessionID = statusLinePayload.sessionID
             ?? bounded(environment["CLAUDE_SESSION_ID"], bytes: 128)
             ?? "claude-\(getppid())"
@@ -132,7 +133,8 @@ public enum HookRunner {
             source: .claude,
             kind: .metadata,
             sessionID: sessionID,
-            costUSD: statusLinePayload.costUSD
+            costUSD: statusLinePayload.costUSD,
+            contextWindow: contextWindowUpdate(statusLinePayload.contextWindow)
         )
         try? services.send(JSONEncoder().encode(event))
         return 0
@@ -190,8 +192,19 @@ public enum HookRunner {
             permission: permission,
             request: request,
             costUSD: payload?.costUSD,
-            costGeneration: payload?.costGeneration
+            costGeneration: payload?.costGeneration,
+            // Usage rides only on metadata. Attaching it to a lifecycle event would fail
+            // validation and take the lifecycle transition down with it.
+            contextWindow: kind == .metadata ? contextWindowUpdate(payload?.contextWindow) : nil
         )
+    }
+
+    static func contextWindowUpdate(_ usage: ContextWindowUsage?) -> ContextWindowUsageUpdate? {
+        switch usage {
+        case nil: nil
+        case .unavailable: .unavailable
+        case .percentage(let percentage): ContextWindowUsageUpdate(usedPercentage: percentage)
+        }
     }
 
     static func terminalBundleIdentifier(environment: [String: String]) -> String? {

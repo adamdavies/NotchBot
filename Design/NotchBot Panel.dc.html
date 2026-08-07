@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>body { margin:0; background: oklch(0.22 0.01 90); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, sans-serif; }</style>
+</helmet>
+
+<div style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding:40px;">
+  <div style="display:flex; flex-direction:column; background: rgba(15,15,17,0.94); backdrop-filter: blur(24px); border-radius:22px; border:1px solid rgba(255,255,255,0.08); overflow:hidden; width:420px; box-shadow: 0 20px 50px rgba(0,0,0,0.45);">
+    <div style="padding:14px 18px 10px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.07);">
+      <div style="font-size:14px; font-weight:700; color:#f5f5f3;">Bots</div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="font-size:11px; color: oklch(0.65 0.01 90);">{{ runningCount }} running · {{ needsActionCount }} need you</div>
+        <div style="background: rgba(255,255,255,0.09); color: oklch(0.85 0.01 90); font-size:11px; font-weight:600; padding:5px 11px; border-radius:8px;">Clear All</div>
+      </div>
+    </div>
+    <sc-for list="{{ queue }}" as="a" hint-placeholder-count="5">
+      <div style="display:flex; flex-direction:column; gap:6px; padding:12px 18px; border-bottom:1px solid rgba(255,255,255,0.05);">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div style="width:8px; height:8px; border-radius:50%; background:{{ a.dotColor }}; flex-shrink:0;"></div>
+          <div style="font-size:13px; font-weight:600; color:#f5f5f3;">{{ a.name }}</div>
+          <div style="display:flex; flex-direction:column; align-items:flex-end; gap:1px; margin-left:auto;">
+            <div style="font-size:11px; color: oklch(0.6 0.01 90);">{{ a.status }}</div>
+            <div style="font-size:10px; color: oklch(0.5 0.01 90);">{{ a.cost }}</div>
+          </div>
+          <div style="width:22px; height:22px; border-radius:50%; background: rgba(255,255,255,0.07); display:flex; align-items:center; justify-content:center; color: oklch(0.7 0.01 90); font-size:11px; flex-shrink:0;">✕</div>
+        </div>
+        <div style="font-size:12px; color: oklch(0.72 0.01 90); padding-left:18px;">{{ a.task }}</div>
+        <sc-if value="{{ a.needsAction }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex; gap:8px; padding-left:18px; margin-top:2px;">
+            <div style="background: oklch(0.6 0.15 150); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Approve</div>
+            <div style="background: rgba(255,255,255,0.08); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Reject</div>
+            <div style="background: rgba(255,255,255,0.08); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Reply</div>
+          </div>
+        </sc-if>
+        <div style="display:flex; align-items:center; gap:6px; padding-left:18px; margin-top:2px;">
+          <div style="flex:1; height:3px; border-radius:2px; background: rgba(255,255,255,0.08); overflow:hidden;">
+            <div style="width:{{ a.contextPct }}%; height:100%; border-radius:2px; background:{{ a.contextColor }};"></div>
+          </div>
+          <div style="font-size:9px; color: oklch(0.5 0.01 90); white-space:nowrap;">{{ a.contextPct }}% ctx</div>
+        </div>
+      </div>
+    </sc-for>
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 18px;">
+      <div style="background: rgba(255,255,255,0.08); border-radius:20px; padding:3px 9px; font-size:10px; font-weight:700; color: oklch(0.75 0.16 145); white-space:nowrap;">{{ spendToday }} today</div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="font-size:10px; font-weight:600; color: oklch(0.6 0.01 90); white-space:nowrap;">Level: Glow</div>
+        <div style="width:64px; height:4px; border-radius:2px; background: rgba(255,255,255,0.08); overflow:hidden;">
+          <div style="width:16%; height:100%; border-radius:2px; background: oklch(0.65 0.08 200);"></div>
+        </div>
+        <div style="font-size:10px; color: oklch(0.45 0.01 90); white-space:nowrap;">16%</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      runningCount: 4,
+      needsActionCount: 2,
+      spendToday: '$4.82',
+      queue: [
+        { name:'refactor-auth', dotColor:'oklch(0.75 0.16 70)', status:'needs approval', task:'Wants to run `rm -rf dist/` before rebuild', needsAction:true, cost:'$0.61', contextPct:38, contextColor:'oklch(0.65 0.08 200)' },
+        { name:'docs-sync', dotColor:'oklch(0.65 0.15 260)', status:'running · 2m', task:'Rewriting README examples for v3 API', needsAction:false, cost:'$1.14', contextPct:61, contextColor:'oklch(0.65 0.08 200)' },
+        { name:'infra-migrate', dotColor:'oklch(0.75 0.16 70)', status:'needs directory access', task:'Requests read access to ~/Projects/legacy-api', needsAction:true, cost:'$0.35', contextPct:19, contextColor:'oklch(0.65 0.08 200)' },
+        { name:'test-runner', dotColor:'oklch(0.65 0.15 260)', status:'running · 40s', task:'Running full suite, 214/860 passed', needsAction:false, cost:'$2.02', contextPct:84, contextColor:'oklch(0.72 0.16 45)' },
+        { name:'changelog-bot', dotColor:'oklch(0.7 0.15 150)', status:'done · 3m ago', task:'Posted release notes to #eng-updates', needsAction:false, cost:'$0.70', contextPct:52, contextColor:'oklch(0.65 0.08 200)' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>
