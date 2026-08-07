@@ -13,42 +13,82 @@
 
 <div style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding:40px;">
   <div style="display:flex; flex-direction:column; background: rgba(15,15,17,0.94); backdrop-filter: blur(24px); border-radius:22px; border:1px solid rgba(255,255,255,0.08); overflow:hidden; width:420px; box-shadow: 0 20px 50px rgba(0,0,0,0.45);">
-    <div style="padding:14px 18px 10px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.07);">
-      <div style="font-size:14px; font-weight:700; color:#f5f5f3;">Bots</div>
-      <div style="display:flex; align-items:center; gap:10px;">
-        <div style="font-size:11px; color: oklch(0.65 0.01 90);">{{ runningCount }} running · {{ needsActionCount }} need you</div>
-        <div style="background: rgba(255,255,255,0.09); color: oklch(0.85 0.01 90); font-size:11px; font-weight:600; padding:5px 11px; border-radius:8px;">Clear All</div>
+    <sc-if value="{{ showHistory }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:14px 18px 10px; display:flex; align-items:center; gap:10px; border-bottom:1px solid rgba(255,255,255,0.07);">
+        <div onClick="{{ closeHistory }}" style="width:22px; height:22px; border-radius:50%; background: rgba(255,255,255,0.07); display:flex; align-items:center; justify-content:center; color: oklch(0.75 0.01 90); font-size:12px; flex-shrink:0; cursor:pointer;">‹</div>
+        <div style="font-size:14px; font-weight:700; color:#f5f5f3;">Today</div>
+        <div style="font-size:11px; color: oklch(0.6 0.01 90); margin-left:auto;">{{ historyCount }} completed</div>
       </div>
-    </div>
-    <sc-for list="{{ queue }}" as="a" hint-placeholder-count="5">
-      <div style="display:flex; flex-direction:column; gap:6px; padding:12px 18px; border-bottom:1px solid rgba(255,255,255,0.05);">
+      <div style="padding:12px 18px 8px; border-bottom:1px solid rgba(255,255,255,0.07);">
+        <svg viewBox="0 0 384 56" width="384" height="56" style="display:block; overflow:visible;">
+          <polygon points="{{ spendChartAreaPoints }}" fill="oklch(0.65 0.08 200)" opacity="0.12"></polygon>
+          <polyline points="{{ spendChartLinePoints }}" fill="none" stroke="oklch(0.65 0.08 200)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"></polyline>
+        </svg>
+        <div style="display:flex; justify-content:space-between; margin-top:2px;">
+          <div style="font-size:9px; color: oklch(0.5 0.01 90);">9a</div>
+          <div style="font-size:9px; color: oklch(0.5 0.01 90);">12p</div>
+          <div style="font-size:9px; color: oklch(0.5 0.01 90);">3p</div>
+        </div>
+      </div>
+      <div style="max-height:360px; overflow-y:auto; display:flex; flex-direction:column;">
+        <sc-for list="{{ history }}" as="h" hint-placeholder-count="4">
+          <div style="display:flex; flex-direction:column; gap:3px; padding:14px 18px; border-bottom:1px solid rgba(255,255,255,0.05);">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <div style="font-size:13px; font-weight:600; color:#f5f5f3;">{{ h.name }}</div>
+              <div style="font-size:9px; font-weight:700; color: oklch(0.7 0.01 90); background: rgba(255,255,255,0.07); border-radius:5px; padding:2px 5px; flex-shrink:0;">{{ h.source }}</div>
+              <div style="font-size:10px; color: oklch(0.5 0.01 90); margin-left:auto; white-space:nowrap;">{{ h.cost }}</div>
+            </div>
+            <div style="font-size:11px; color: oklch(0.62 0.01 90);">{{ h.timeRange }} · {{ h.duration }}</div>
+            <sc-for list="{{ h.subagents }}" as="sub" hint-placeholder-count="0">
+              <div style="display:flex; align-items:center; gap:8px; margin-top:6px; margin-left:14px; padding-left:10px; border-left:1px solid rgba(255,255,255,0.1);">
+                <div style="font-size:12px; color: oklch(0.8 0.01 90);">{{ sub.name }}</div>
+                <div style="font-size:9px; font-weight:700; color: oklch(0.6 0.01 90); background: rgba(255,255,255,0.06); border-radius:5px; padding:2px 5px; flex-shrink:0;">{{ sub.source }}</div>
+                <div style="font-size:10px; color: oklch(0.48 0.01 90); margin-left:auto; white-space:nowrap;">{{ sub.cost }}</div>
+              </div>
+              <div style="font-size:10px; color: oklch(0.55 0.01 90); margin-left:32px;">{{ sub.timeRange }} · {{ sub.duration }}</div>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+    <sc-if value="{{ showQueue }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:14px 18px 10px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.07);">
+        <div style="font-size:14px; font-weight:700; color:#f5f5f3;">Bots</div>
         <div style="display:flex; align-items:center; gap:10px;">
-          <div style="width:8px; height:8px; border-radius:50%; background:{{ a.dotColor }}; flex-shrink:0;"></div>
-          <div style="font-size:13px; font-weight:600; color:#f5f5f3;">{{ a.name }}</div>
-          <div style="display:flex; flex-direction:column; align-items:flex-end; gap:1px; margin-left:auto;">
-            <div style="font-size:11px; color: oklch(0.6 0.01 90);">{{ a.status }}</div>
-            <div style="font-size:10px; color: oklch(0.5 0.01 90);">{{ a.cost }}</div>
-          </div>
-          <div style="width:22px; height:22px; border-radius:50%; background: rgba(255,255,255,0.07); display:flex; align-items:center; justify-content:center; color: oklch(0.7 0.01 90); font-size:11px; flex-shrink:0;">✕</div>
-        </div>
-        <div style="font-size:12px; color: oklch(0.72 0.01 90); padding-left:18px;">{{ a.task }}</div>
-        <sc-if value="{{ a.needsAction }}" hint-placeholder-val="{{ false }}">
-          <div style="display:flex; gap:8px; padding-left:18px; margin-top:2px;">
-            <div style="background: oklch(0.6 0.15 150); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Approve</div>
-            <div style="background: rgba(255,255,255,0.08); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Reject</div>
-            <div style="background: rgba(255,255,255,0.08); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Reply</div>
-          </div>
-        </sc-if>
-        <div style="display:flex; align-items:center; gap:6px; padding-left:18px; margin-top:2px;">
-          <div style="flex:1; height:3px; border-radius:2px; background: rgba(255,255,255,0.08); overflow:hidden;">
-            <div style="width:{{ a.contextPct }}%; height:100%; border-radius:2px; background:{{ a.contextColor }};"></div>
-          </div>
-          <div style="font-size:9px; color: oklch(0.5 0.01 90); white-space:nowrap;">{{ a.contextPct }}% ctx</div>
+          <div style="font-size:11px; color: oklch(0.65 0.01 90);">{{ runningCount }} running · {{ needsActionCount }} need you</div>
+          <div style="background: rgba(255,255,255,0.09); color: oklch(0.85 0.01 90); font-size:11px; font-weight:600; padding:5px 11px; border-radius:8px;">Clear All</div>
         </div>
       </div>
-    </sc-for>
+      <sc-for list="{{ queue }}" as="a" hint-placeholder-count="5">
+        <div style="display:flex; flex-direction:column; gap:6px; padding:12px 18px; border-bottom:1px solid rgba(255,255,255,0.05);">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="width:8px; height:8px; border-radius:50%; background:{{ a.dotColor }}; flex-shrink:0;"></div>
+            <div style="font-size:13px; font-weight:600; color:#f5f5f3;">{{ a.name }}</div>
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:1px; margin-left:auto;">
+              <div style="font-size:11px; color: oklch(0.6 0.01 90);">{{ a.status }}</div>
+              <div style="font-size:10px; color: oklch(0.5 0.01 90);">{{ a.cost }}</div>
+            </div>
+            <div style="width:22px; height:22px; border-radius:50%; background: rgba(255,255,255,0.07); display:flex; align-items:center; justify-content:center; color: oklch(0.7 0.01 90); font-size:11px; flex-shrink:0;">✕</div>
+          </div>
+          <div style="font-size:12px; color: oklch(0.72 0.01 90); padding-left:18px;">{{ a.task }}</div>
+          <sc-if value="{{ a.needsAction }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; gap:8px; padding-left:18px; margin-top:2px;">
+              <div style="background: oklch(0.6 0.15 150); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Approve</div>
+              <div style="background: rgba(255,255,255,0.08); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Reject</div>
+              <div style="background: rgba(255,255,255,0.08); color:white; font-size:11px; font-weight:700; padding:5px 12px; border-radius:8px;">Reply</div>
+            </div>
+          </sc-if>
+          <div style="display:flex; align-items:center; gap:6px; padding-left:18px; margin-top:2px;">
+            <div style="flex:1; height:3px; border-radius:2px; background: rgba(255,255,255,0.08); overflow:hidden;">
+              <div style="width:{{ a.contextPct }}%; height:100%; border-radius:2px; background:{{ a.contextColor }};"></div>
+            </div>
+            <div style="font-size:9px; color: oklch(0.5 0.01 90); white-space:nowrap;">{{ a.contextPct }}% ctx</div>
+          </div>
+        </div>
+      </sc-for>
+    </sc-if>
     <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 18px;">
-      <div style="background: rgba(255,255,255,0.08); border-radius:20px; padding:3px 9px; font-size:10px; font-weight:700; color: oklch(0.75 0.16 145); white-space:nowrap;">{{ spendToday }} today</div>
+      <div onClick="{{ openHistory }}" style="background: rgba(255,255,255,0.08); border-radius:20px; padding:3px 9px; font-size:10px; font-weight:700; color: oklch(0.75 0.16 145); white-space:nowrap; cursor:pointer;">{{ spendToday }} today</div>
       <div style="display:flex; align-items:center; gap:8px;">
         <div style="font-size:10px; font-weight:600; color: oklch(0.6 0.01 90); white-space:nowrap;">Level: Glow</div>
         <div style="width:64px; height:4px; border-radius:2px; background: rgba(255,255,255,0.08); overflow:hidden;">
@@ -63,8 +103,33 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
+  state = { showHistory: false };
   renderVals() {
+    const history = [
+      { name:'changelog-bot', source:'Claude Code', timeRange:'2:41–2:44p', duration:'3m', cost:'$0.70', minute:344, cumAfter:4.07, subagents:[] },
+      { name:'test-runner', source:'OpenCode', timeRange:'1:58–2:31p', duration:'33m', cost:'$2.02', minute:331, cumAfter:3.37, subagents:[] },
+      { name:'refactor-auth', source:'Claude Code', timeRange:'12:10–12:38p', duration:'28m', cost:'$1.35', minute:218, cumAfter:1.35, subagents:[
+        { name:'refactor-auth · migrate-tests', source:'Claude Code', timeRange:'12:19–12:36p', duration:'17m', cost:'$0.44' },
+      ] },
+      { name:'infra-migrate', source:'OpenCode', timeRange:'9:14–9:22a', duration:'8m', cost:null, minute:22, cumAfter:0, subagents:[] },
+    ];
+    const chartMinutes = 360;
+    const chartW = 384, chartH = 56;
+    const stepsAsc = [...history].reverse();
+    const linePts = [[0,0], ...stepsAsc.map(h => [h.minute, h.cumAfter]), [chartMinutes, stepsAsc[stepsAsc.length-1].cumAfter]];
+    const maxCum = Math.max(...linePts.map(p => p[1]), 0.01);
+    const toXY = ([m, c]) => [ (m/chartMinutes)*chartW, chartH - (c/maxCum)*chartH*0.85 - 4 ];
+    const linePoints = linePts.map(toXY).map(([x,y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+    const areaPoints = `0,${chartH} ` + linePts.map(toXY).map(([x,y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ') + ` ${chartW},${chartH}`;
     return {
+      showHistory: this.state.showHistory,
+      showQueue: !this.state.showHistory,
+      spendChartLinePoints: linePoints,
+      spendChartAreaPoints: areaPoints,
+      historyCount: history.reduce((n,h)=>n+1+h.subagents.length,0),
+      history: history.map(h => ({ ...h, cost: h.cost ?? 'no cost data', subagents: h.subagents.map(s => ({ ...s, cost: s.cost ?? 'no cost data' })) })),
+      openHistory: () => this.setState({ showHistory: true }),
+      closeHistory: () => this.setState({ showHistory: false }),
       runningCount: 4,
       needsActionCount: 2,
       spendToday: '$4.82',

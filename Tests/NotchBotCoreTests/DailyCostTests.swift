@@ -378,3 +378,53 @@ import Testing
     #expect(nextDay.totalCost == 0)
     #expect(DailyCostPreference.loadThreshold(from: defaults) == 12.35)
 }
+
+@Test func cumulativeCostFindsASessionAcrossItsGenerations() {
+    var tracker = DailyCostTracker()
+    tracker.apply(AgentEvent(source: .claude, kind: .metadata, sessionID: "plain", costUSD: 3.0))
+    tracker.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "gen", costUSD: 1.0, costGeneration: "a"
+    ))
+    tracker.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "gen", costUSD: 4.5, costGeneration: "b"
+    ))
+
+    #expect(tracker.cumulativeCost(source: .claude, sessionID: "plain") == 3.0)
+    // Highest across generations, which is the live running total after a provider restart.
+    #expect(tracker.cumulativeCost(source: .opencode, sessionID: "gen") == 4.5)
+    // Not confused by another source or an unknown session.
+    #expect(tracker.cumulativeCost(source: .opencode, sessionID: "plain") == nil)
+    #expect(tracker.cumulativeCost(source: .claude, sessionID: "missing") == nil)
+}
+
+@Test func cumulativeCostBaselinesSurviveAReloadForTimelineUse() throws {
+    let suiteName = "DailyCostBaselineTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
+
+    var tracker = DailyCostTracker()
+    tracker.apply(AgentEvent(source: .claude, kind: .metadata, sessionID: "resumed", costUSD: 25.80))
+    DailyCostPreference.save(
+        totalCost: tracker.totalCost,
+        sessionCosts: tracker.sessionCosts,
+        alertFired: false,
+        to: defaults,
+        now: now,
+        calendar: calendar
+    )
+
+    // A later launch on a different day still recovers the per-session baseline, even though the
+    // daily total resets. This is what the session timeline relies on.
+    let reloaded = DailyCostPreference.load(
+        from: defaults,
+        now: now.addingTimeInterval(24 * 60 * 60),
+        calendar: calendar
+    )
+    let restored = DailyCostTracker(totalCost: reloaded.totalCost, sessionCosts: reloaded.sessionCosts)
+
+    #expect(reloaded.totalCost == 0)
+    #expect(restored.cumulativeCost(source: .claude, sessionID: "resumed") == 25.80)
+}

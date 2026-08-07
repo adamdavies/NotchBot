@@ -5,21 +5,35 @@ struct QueueProgressFooter: View {
     static let height: CGFloat = 45
 
     @ObservedObject var model: ActivityModel
+    @ObservedObject var navigation: PanelNavigationModel
+
+    /// The pill is the only way into Today, so it appears whenever Today has something to show —
+    /// not only when spend was tracked. A user who never enabled cost tracking still has a day of
+    /// completed runs to look back on.
+    private var showsTodayPill: Bool {
+        model.dailyCostTotal > 0 || model.hasTodayHistory
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             Divider().overlay(.white.opacity(0.07))
 
             HStack(spacing: 8) {
-                if model.dailyCostTotal > 0 {
-                    Text(model.dailyCostDisplayText)
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(Self.costColor(for: model.dailyCostAlertLevel))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.white.opacity(0.08)))
-                        .accessibilityElement()
-                        .accessibilityLabel(costAccessibilityLabel)
+                if showsTodayPill {
+                    Button {
+                        navigation.select(.today)
+                    } label: {
+                        Text(model.todayPillText)
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(Self.costColor(for: model.dailyCostAlertLevel))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(costAccessibilityLabel)
+                    .accessibilityHint("Shows today's completed sessions")
+                    .help("Show today's completed sessions")
                 }
 
                 Spacer()
@@ -54,7 +68,8 @@ struct QueueProgressFooter: View {
     }
 
     private var costAccessibilityLabel: String {
-        let spend = model.dailyCostDisplayText
+        let spend = model.todayPillText
+        guard model.dailyCostTotal > 0 else { return spend }
         return switch model.dailyCostAlertLevel {
         case .normal: spend
         case .warning: "\(spend), approaching \(model.dailyCostThresholdDisplayText ?? "")"

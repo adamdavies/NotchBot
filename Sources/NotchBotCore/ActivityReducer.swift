@@ -35,24 +35,75 @@ public struct SessionActivity: Equatable, Identifiable, Sendable {
     public var hasProviderActivity: Bool
 
     public var costUSD: Double?
+    /// The provider's cumulative-cost generation. OpenCode restarts its running total when this
+    /// changes, so it is retained to rebase the cycle baseline instead of producing a negative delta.
+    public var costGeneration: String?
     /// Latest provider-reported context-window usage, 0...100. Process memory only — it is never
     /// persisted, so it is absent again after a restart until the provider reports it afresh.
     public var contextUsedPercentage: Double?
+
+    /// When the current run of work began. `nil` until the session shows its first non-metadata
+    /// provider activity; a completion that arrives first adopts its own timestamp.
+    public var cycleStartedAt: Date?
+    /// Set once the current cycle has been handed to the session timeline, so a later
+    /// acknowledgement, clear, or repeated completion attention cannot record it twice.
+    public var isCycleArchived: Bool
+    /// The cumulative provider cost at the moment this cycle started. The cycle's own cost is the
+    /// delta from here, so a session's second run is not charged for its first.
+    public var cycleCostBaseline: Double?
+    /// Whether valid cost metadata was observed during this cycle while tracking was enabled. This
+    /// is what separates "cost tracking was off" from "tracked and cost nothing".
+    public var hasCycleCost: Bool
 
     public var key: SessionKey { SessionKey(source: source, sessionID: sessionID) }
     public var id: String { key.rawValue }
     public var isSubagent: Bool { parentSessionID != nil }
     public var pendingRequestCount: Int { pendingRequests.count }
+
+    /// This cycle's spend, or `nil` when none was observed. A delta that cannot be trusted — a
+    /// cumulative value that moved backwards despite the generation rebase — is reported as absent
+    /// rather than clamped to zero, because zero is a claim that the cycle was free.
+    public var cycleCostUSD: Double? {
+        guard hasCycleCost, let costUSD, costUSD.isFinite else { return nil }
+        let delta = costUSD - (cycleCostBaseline ?? 0)
+        guard delta.isFinite, delta >= 0 else { return nil }
+        return delta
+    }
 }
 
 public struct ActivityChange: Equatable, Sendable {
     public let state: RobotState
     public let primarySession: SessionActivity?
     public let shouldNotify: Bool
+    /// Cycles that reached a terminal state on this mutation, for the session timeline. Empty for
+    /// every non-terminal path: stale cleanup, capacity eviction, delayed-event rejection, attention
+    /// expiry, and manual dismissal all remove rows without recording them.
+    public let completedSessions: [CompletedSession]
+}
+
+/// Why a session subtree is being removed. Only `providerTerminal` produces timeline entries — the
+/// rest are housekeeping or a user dismissing a row they have already dealt with.
+public enum SessionRemovalDisposition: Equatable, Sendable {
+    /// The provider reported the session ended.
+    case providerTerminal
+    /// The user cleared the row from the queue.
+    case manualDismissal
+    /// The session went quiet long enough to be swept.
+    case staleCleanup
+    /// Room had to be made, or an event arrived for a subtree whose parent was already cleared.
+    case capacityCleanup
 }
 
 public struct ActivityReducer: Sendable {
     public static let maximumSessions = 256
+
+    /// The cumulative provider cost already recorded for a session before this launch, if any.
+    ///
+    /// A session that was already running when NotchBot started reports its whole running total on
+    /// its first metadata event. Without a baseline the first cycle NotchBot observes is charged for
+    /// every dollar spent before it was watching — a twelve-second row billed for the whole session.
+    /// Seeded from the cost baselines that already persist across restarts for the daily total.
+    public var launchCostBaseline: (@Sendable (SessionKey) -> Double?)?
 
     private var sessions: [SessionKey: SessionActivity] = [:]
     private var latestEventAt: [SessionKey: Date] = [:]
@@ -130,8 +181,14 @@ public struct ActivityReducer: Sendable {
             $0.responseToken != previousSession?.permission?.responseToken
         } ?? false
 
+        var completedSessions: [CompletedSession] = []
         if event.kind == .cleared {
-            removeTree(rootedAt: key, clearedAt: event.timestamp)
+            completedSessions = removeTree(
+                rootedAt: key,
+                clearedAt: event.timestamp,
+                disposition: .providerTerminal,
+                endedAt: event.timestamp
+            )
         } else if event.kind == .metadata {
             let parentSessionID = normalizedParentSessionID(event.parentSessionID, for: key, source: event.source)
             let parentClearedAt = parentSessionID.flatMap {
@@ -139,15 +196,31 @@ public struct ActivityReducer: Sendable {
             }
             if let session = sessions[key], let parentClearedAt,
                !session.hasProviderActivity || session.providerUpdatedAt <= parentClearedAt {
-                removeTree(rootedAt: key, clearedAt: parentClearedAt)
+                // The provider already ended this subtree's parent; this late metadata is what
+                // finally reveals the relationship, so the subtree ends on the provider's terms.
+                completedSessions = removeTree(
+                    rootedAt: key,
+                    clearedAt: parentClearedAt,
+                    disposition: .providerTerminal,
+                    endedAt: parentClearedAt
+                )
             } else if sessions[key] != nil {
                 if appliesSessionTitle { sessions[key]?.sessionTitle = event.sessionTitle }
                 if appliesActivity { sessions[key]?.activityDescription = event.activityDescription }
                 if let parentSessionID, event.timestamp >= sessions[key]!.updatedAt {
                     sessions[key]?.parentSessionID = parentSessionID
                 }
-                if let cost = event.costUSD, cost >= 0 {
+                if let cost = event.costUSD, cost >= 0, cost.isFinite {
+                    // A *changed* generation means the provider restarted its running total, so
+                    // rebase rather than letting the delta go negative. Seeing a generation for the
+                    // first time is not a restart, and must not discard a launch baseline.
+                    if let previousGeneration = sessions[key]?.costGeneration,
+                       previousGeneration != event.costGeneration {
+                        sessions[key]?.cycleCostBaseline = nil
+                    }
+                    sessions[key]?.costGeneration = event.costGeneration
                     sessions[key]?.costUSD = cost
+                    sessions[key]?.hasCycleCost = true
                 }
                 // Presence is the signal: a present update replaces the percentage even when its
                 // value is nil, which is how compaction retracts a figure that no longer holds.
@@ -171,6 +244,7 @@ public struct ActivityReducer: Sendable {
                         ? event.activityDescription : pendingMetadata[key]?.activityDescription,
                     parentSessionID: parentSessionID ?? pendingMetadata[key]?.parentSessionID,
                     costUSD: [event.costUSD, pendingMetadata[key]?.costUSD].compactMap { $0 }.max(),
+                    costGeneration: event.costGeneration ?? pendingMetadata[key]?.costGeneration,
                     contextUsedPercentage: event.contextWindow.map { $0.usedPercentage }
                         ?? pendingMetadata[key]?.contextUsedPercentage,
                     updatedAt: event.timestamp
@@ -190,7 +264,7 @@ public struct ActivityReducer: Sendable {
             latestClearedAt.removeValue(forKey: key)
             if sessions[key] == nil, sessions.count >= Self.maximumSessions,
                let oldest = sessions.min(by: { $0.value.updatedAt < $1.value.updatedAt })?.key {
-                removeTree(rootedAt: rootKey(for: oldest))
+                removeTree(rootedAt: rootKey(for: oldest), disposition: .capacityCleanup)
             }
             let parentSessionID = normalizedParentSessionID(
                 event.parentSessionID ?? sessions[key]?.parentSessionID ?? pendingMetadata[key]?.parentSessionID,
@@ -242,6 +316,30 @@ public struct ActivityReducer: Sendable {
                 ? previousSession?.providerUpdatedAt ?? event.timestamp
                 : event.timestamp
             let hasProviderActivity = opensRequest ? previousSession?.hasProviderActivity ?? false : true
+
+            // Cycle bookkeeping for the session timeline. A request opening is not new work, so it
+            // must never move the start time; a `.working` event after an archived completion is the
+            // start of a genuinely new run and rebases the cost baseline onto what has been spent so
+            // far, so the second run is not charged for the first.
+            var cycleStartedAt = previousSession?.cycleStartedAt
+            var isCycleArchived = previousSession?.isCycleArchived ?? false
+            // A session appearing for the first time starts from whatever it had already spent before
+            // this launch, so only what accrues from here counts towards the cycle.
+            var cycleCostBaseline = previousSession == nil
+                ? launchCostBaseline?(key)
+                : previousSession?.cycleCostBaseline
+            var hasCycleCost = previousSession?.hasCycleCost ?? (pendingMetadata[key]?.costUSD != nil)
+            if !opensRequest {
+                if cycleStartedAt == nil {
+                    cycleStartedAt = event.timestamp
+                } else if isCycleArchived, event.kind == .working {
+                    cycleStartedAt = event.timestamp
+                    isCycleArchived = false
+                    cycleCostBaseline = previousSession?.costUSD
+                    hasCycleCost = false
+                }
+            }
+
             sessions[key] = SessionActivity(
                 source: event.source,
                 sessionID: event.sessionID,
@@ -268,10 +366,24 @@ public struct ActivityReducer: Sendable {
                 providerUpdatedAt: providerUpdatedAt,
                 hasProviderActivity: hasProviderActivity,
                 costUSD: previousSession?.costUSD ?? pendingMetadata[key]?.costUSD,
+                costGeneration: previousSession?.costGeneration ?? pendingMetadata[key]?.costGeneration,
                 contextUsedPercentage: previousSession?.contextUsedPercentage
-                    ?? pendingMetadata[key]?.contextUsedPercentage
+                    ?? pendingMetadata[key]?.contextUsedPercentage,
+                cycleStartedAt: cycleStartedAt,
+                isCycleArchived: isCycleArchived,
+                cycleCostBaseline: cycleCostBaseline,
+                hasCycleCost: hasCycleCost
             )
             pendingMetadata.removeValue(forKey: key)
+
+            // A top-level session entering completion attention is the main way a cycle reaches the
+            // timeline. The archived flag makes it idempotent: a repeated completion attention, a
+            // later acknowledgement, and the eventual clear all find the cycle already recorded.
+            if event.isCompletionAttention, let session = sessions[key],
+               !session.isSubagent, !session.isCycleArchived {
+                completedSessions.append(snapshot(of: session, endedAt: event.timestamp))
+                sessions[key]?.isCycleArchived = true
+            }
         }
         trimEventHistory()
 
@@ -280,7 +392,8 @@ public struct ActivityReducer: Sendable {
             state: current?.state ?? .idle,
             primarySession: current,
             shouldNotify: event.kind == .attention
-                && (isNewRequest || isNewLegacyPermission || event.request == nil && !wasAttention)
+                && (isNewRequest || isNewLegacyPermission || event.request == nil && !wasAttention),
+            completedSessions: completedSessions
         )
     }
 
@@ -289,7 +402,30 @@ public struct ActivityReducer: Sendable {
         let parentKey = Self.key(source: event.source, sessionID: parentSessionID)
         guard let clearedAt = latestClearedAt[parentKey], event.timestamp <= clearedAt else { return nil }
         let key = Self.key(source: event.source, sessionID: event.sessionID)
-        removeTree(rootedAt: key, clearedAt: clearedAt)
+        removeTree(rootedAt: key, clearedAt: clearedAt, disposition: .capacityCleanup)
+        trimEventHistory()
+        return currentChange()
+    }
+
+    /// Removes a session subtree because the user dismissed it, not because the provider ended it.
+    /// The row leaves the queue without producing a timeline entry; a cycle this session already
+    /// completed stays in Today, because it was archived when the completion arrived.
+    @discardableResult
+    public mutating func dismiss(source: AgentSource, sessionID: String, at timestamp: Date) -> ActivityChange {
+        let key = Self.key(source: source, sessionID: sessionID)
+        // `clearedAt` is still recorded so a late provider event cannot resurrect a dismissed row.
+        removeTree(rootedAt: key, clearedAt: timestamp, disposition: .manualDismissal)
+        trimEventHistory()
+        return currentChange()
+    }
+
+    @discardableResult
+    public mutating func dismissAll(at timestamp: Date) -> ActivityChange {
+        // Snapshot the keys: each removal takes a whole subtree, so the dictionary changes shape
+        // underneath the loop. Keys an earlier iteration already removed are skipped.
+        for key in Array(sessions.keys) where sessions[key] != nil {
+            removeTree(rootedAt: key, clearedAt: timestamp, disposition: .manualDismissal)
+        }
         trimEventHistory()
         return currentChange()
     }
@@ -302,7 +438,7 @@ public struct ActivityReducer: Sendable {
         for key in staleKeys where sessions[key] != nil {
             let subtree = treeKeys(rootedAt: key, childKeys: childKeys)
             if subtree.compactMap({ sessions[$0] }).allSatisfy({ $0.updatedAt < cutoff }) {
-                removeTree(rootedAt: key, childKeys: childKeys)
+                removeTree(rootedAt: key, childKeys: childKeys, disposition: .staleCleanup)
             }
         }
         latestEventAt = latestEventAt.filter { $0.value >= cutoff }
@@ -335,7 +471,12 @@ public struct ActivityReducer: Sendable {
             sessions[key]?.reason = nil
         }
         let current = primarySession
-        return ActivityChange(state: current?.state ?? .idle, primarySession: current, shouldNotify: false)
+        return ActivityChange(
+            state: current?.state ?? .idle,
+            primarySession: current,
+            shouldNotify: false,
+            completedSessions: []
+        )
     }
 
     /// Drops every context percentage, live and pending. Called when the user turns usage and cost
@@ -348,6 +489,23 @@ public struct ActivityReducer: Sendable {
         }
         for key in pendingMetadata.keys {
             pendingMetadata[key]?.contextUsedPercentage = nil
+        }
+        return currentChange()
+    }
+
+    /// Drops every cost figure and marks the running cycles as having no observed cost. Called when
+    /// the user turns tracking off: without this, a value captured while tracking was on would keep
+    /// flowing into timeline rows written after the opt-out.
+    @discardableResult
+    public mutating func clearCostTracking() -> ActivityChange {
+        for key in sessions.keys {
+            sessions[key]?.costUSD = nil
+            sessions[key]?.costGeneration = nil
+            sessions[key]?.cycleCostBaseline = nil
+            sessions[key]?.hasCycleCost = false
+        }
+        for key in pendingMetadata.keys {
+            pendingMetadata[key]?.costUSD = nil
         }
         return currentChange()
     }
@@ -370,7 +528,12 @@ public struct ActivityReducer: Sendable {
             sessions[key]?.isAwaitingPermissionResolution = false
         }
         let current = primarySession
-        return ActivityChange(state: current?.state ?? .idle, primarySession: current, shouldNotify: false)
+        return ActivityChange(
+            state: current?.state ?? .idle,
+            primarySession: current,
+            shouldNotify: false,
+            completedSessions: []
+        )
     }
 
     @discardableResult
@@ -519,12 +682,27 @@ public struct ActivityReducer: Sendable {
         return result
     }
 
+    /// Returns the cycles this removal ended, which is non-empty only for a provider-terminal
+    /// removal of sessions that had not already been archived.
+    @discardableResult
     private mutating func removeTree(
         rootedAt rootKey: SessionKey,
         clearedAt: Date? = nil,
-        childKeys: [SessionKey: [SessionKey]]? = nil
-    ) {
+        childKeys: [SessionKey: [SessionKey]]? = nil,
+        disposition: SessionRemovalDisposition,
+        endedAt: Date? = nil
+    ) -> [CompletedSession] {
         let keysToRemove = treeKeys(rootedAt: rootKey, childKeys: childKeys)
+        var completed: [CompletedSession] = []
+        if disposition == .providerTerminal, let endedAt {
+            // Captured before anything is deleted. A snapshot's group is resolved by walking parent
+            // links through `sessions`, so a removed subagent must still see its hierarchy intact.
+            completed = keysToRemove
+                .compactMap { sessions[$0] }
+                .filter { !$0.isCycleArchived }
+                .sorted { $0.key < $1.key }
+                .map { snapshot(of: $0, endedAt: endedAt) }
+        }
         for key in keysToRemove {
             if let session = sessions.removeValue(forKey: key) {
                 for request in session.pendingRequests {
@@ -550,6 +728,29 @@ public struct ActivityReducer: Sendable {
             latestActivityAt.removeValue(forKey: key)
             pendingMetadata.removeValue(forKey: key)
         }
+        return completed
+    }
+
+    /// Builds the persisted row for one cycle. A session that reached a terminal state without ever
+    /// showing working activity adopts the end instant as its start, producing a zero-duration row
+    /// rather than a missing one.
+    private func snapshot(of session: SessionActivity, endedAt: Date) -> CompletedSession {
+        let startedAt = session.cycleStartedAt ?? endedAt
+        return CompletedSession(
+            cycleID: CompletedSession.cycleID(
+                source: session.source,
+                sessionID: session.sessionID,
+                startedAt: startedAt
+            ),
+            source: session.source,
+            sessionID: session.sessionID,
+            parentSessionID: session.parentSessionID,
+            groupID: rootKey(for: session.key).sessionID,
+            title: session.sessionTitle,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            costUSD: session.cycleCostUSD
+        )
     }
 
     private mutating func applyRequestOverlay(to key: SessionKey) {
@@ -610,7 +811,12 @@ public struct ActivityReducer: Sendable {
 
     private func currentChange() -> ActivityChange {
         let current = primarySession
-        return ActivityChange(state: current?.state ?? .idle, primarySession: current, shouldNotify: false)
+        return ActivityChange(
+            state: current?.state ?? .idle,
+            primarySession: current,
+            shouldNotify: false,
+            completedSessions: []
+        )
     }
 
     private mutating func trimEventHistory() {
@@ -642,7 +848,8 @@ private struct PendingMetadata: Sendable {
     let sessionTitle: String?
     let activityDescription: String?
     let parentSessionID: String?
-    let costUSD: Double?
+    var costUSD: Double?
+    let costGeneration: String?
     var contextUsedPercentage: Double?
     let updatedAt: Date
 }

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AgentQueueView: View {
     @ObservedObject var model: ActivityModel
+    @ObservedObject var navigation: PanelNavigationModel
     let onHoverChanged: (Bool) -> Void
 
     var body: some View {
@@ -56,7 +57,7 @@ struct AgentQueueView: View {
                 }
             }
 
-            QueueProgressFooter(model: model)
+            QueueProgressFooter(model: model, navigation: navigation)
         }
         .frame(width: 420, height: queueHeight)
         .background(cardBackground)

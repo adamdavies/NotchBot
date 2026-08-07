@@ -55,7 +55,7 @@ import Testing
     #expect(try String(contentsOf: fixture.helperOwnershipURL, encoding: .utf8)
         == NotchBotIntegrationFiles.helperOwnershipMarker)
     let status = try JSONDecoder().decode(IntegrationInstallStatus.self, from: Data(contentsOf: fixture.installStatusURL))
-    #expect(status.version == 20)
+    #expect(status.version == 21)
 }
 
 @MainActor
@@ -290,6 +290,13 @@ private final class InstallerFixture {
     var helperOwnershipURL: URL { NotchBotIntegrationFiles.helperOwnershipURL(helperURL: helperURL) }
     var installStatusURL: URL { NotchBotIntegrationFiles.installStatusURL(applicationSupportDirectory: support) }
     var statusLineStateURL: URL { support.appendingPathComponent("statusline-state.json") }
+    var sessionTimelineURL: URL { support.appendingPathComponent("session-timeline.json") }
+
+    func writeSessionTimeline() throws {
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        let payload = #"{"version":1,"day":"1-2026-8-7","sessions":[]}"#
+        try Data(payload.utf8).write(to: sessionTimelineURL)
+    }
 
     @MainActor func installer(
         makeUUID: @escaping () -> UUID = UUID.init,
@@ -368,4 +375,73 @@ private func installerPermissions(of url: URL) throws -> Int {
     installer.uninstall()
     #expect(!installer.isInstalled)
     #expect(!fixture.installer().isInstalled)
+}
+
+@MainActor
+@Test func uninstallRemovesTheSessionTimeline() throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let installer = fixture.installer()
+    installer.install()
+    try fixture.writeSessionTimeline()
+    #expect(FileManager.default.fileExists(atPath: fixture.sessionTimelineURL.path))
+
+    var removalNotifications = 0
+    let observer = NotificationCenter.default.addObserver(
+        forName: .notchBotIntegrationsRemoved,
+        object: nil,
+        queue: nil
+    ) { _ in removalNotifications += 1 }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    installer.uninstall()
+
+    #expect(installer.message == "Integrations removed")
+    #expect(!FileManager.default.fileExists(atPath: fixture.sessionTimelineURL.path))
+    #expect(removalNotifications == 1)
+}
+
+@MainActor
+@Test func uninstallSucceedsWhenNoSessionTimelineWasEverWritten() throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let installer = fixture.installer()
+    installer.install()
+
+    installer.uninstall()
+
+    #expect(installer.message == "Integrations removed")
+    #expect(!FileManager.default.fileExists(atPath: fixture.sessionTimelineURL.path))
+}
+
+@MainActor
+@Test func uninstallRefusesAnUnsafeTimelineDestinationBeforeChangingAnything() throws {
+    let fixture = try InstallerFixture()
+    defer { fixture.remove() }
+    let installer = fixture.installer()
+    installer.install()
+
+    // The destination has been swapped for a link to a file outside NotchBot's state.
+    let outside = fixture.root.appendingPathComponent("elsewhere")
+    try Data("private".utf8).write(to: outside)
+    try FileManager.default.createSymbolicLink(at: fixture.sessionTimelineURL, withDestinationURL: outside)
+
+    var removalNotifications = 0
+    let observer = NotificationCenter.default.addObserver(
+        forName: .notchBotIntegrationsRemoved,
+        object: nil,
+        queue: nil
+    ) { _ in removalNotifications += 1 }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    installer.uninstall()
+
+    #expect(installer.message.hasPrefix("Removal failed"))
+    #expect(removalNotifications == 0)
+    // Nothing was followed, and nothing else was removed either — the integrations are intact.
+    #expect(try Data(contentsOf: outside) == Data("private".utf8))
+    #expect(FileManager.default.fileExists(atPath: fixture.helperURL.path))
+    #expect(FileManager.default.fileExists(atPath: fixture.pluginURL.path))
+    #expect(ClaudeHooks.containsManagedHandlers(in: try fixture.settings(), hookPath: fixture.helperURL.path))
+    #expect(fixture.installer().isInstalled)
 }
