@@ -28,11 +28,13 @@ public enum StatusLineWrapper {
         let escapedHookPath = shellEscaped(hookPath)
         let header = """
             #!/bin/bash
-            # NotchBot cost tracking wrapper.
+            # NotchBot usage and cost tracking wrapper.
             # This script forwards Claude Code's status line data to NotchBot
-            # for estimated cost tracking, then passes it to your status line
-            # command. To disable, toggle off cost tracking in NotchBot's menu,
-            # or replace this command in ~/.claude/settings.json with your own.
+            # for estimated cost tracking and context-window usage, then passes
+            # it to your status line command. NotchBot reads only the total cost
+            # and the reported context percentage. To disable, toggle off usage
+            # and cost tracking in NotchBot's menu, or replace this command in
+            # ~/.claude/settings.json with your own.
             # \(NotchBotIntegrationFiles.generatedMarker). Do not edit.
             """
         let body: String

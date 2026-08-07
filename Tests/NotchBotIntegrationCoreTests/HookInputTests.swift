@@ -271,3 +271,63 @@ import Testing
 
     #expect(payload?.costUSD == nil)
 }
+
+@Test func statusLinePayloadExtractsContextWindowPercentage() throws {
+    let data = Data("""
+    {"session_id":"s1","context_window":{"used_percentage":73.5}}
+    """.utf8)
+    let payload = try HookInput.decodeStatusLinePayload(from: data)
+
+    #expect(payload?.contextWindow == .percentage(73.5))
+}
+
+/// Three distinct outcomes, and the difference matters: absent preserves, present-without-a-usable
+/// percentage retracts. A `context_window` block carrying only token totals falls in the second
+/// group — we were told about the context window and given no percentage in it.
+@Test func statusLinePayloadDistinguishesAbsentFromUnavailableContext() throws {
+    let absent = try HookInput.decodeStatusLinePayload(from: Data("""
+    {"session_id":"s1","cost":{"total_cost_usd":1.0}}
+    """.utf8))
+    #expect(absent?.contextWindow == nil)
+
+    let explicitNull = try HookInput.decodeStatusLinePayload(from: Data("""
+    {"session_id":"s1","context_window":{"used_percentage":null}}
+    """.utf8))
+    #expect(explicitNull?.contextWindow == .unavailable)
+
+    let tokensOnly = try HookInput.decodeStatusLinePayload(from: Data("""
+    {"session_id":"s1","context_window":{"total_input_tokens":5000}}
+    """.utf8))
+    #expect(tokensOnly?.contextWindow == .unavailable)
+}
+
+@Test(arguments: ["-1", "101", "-0.5", "100.1"])
+func statusLinePayloadTreatsOutOfRangeContextAsUnavailable(value: String) throws {
+    let payload = try HookInput.decodeStatusLinePayload(from: Data("""
+    {"session_id":"s1","context_window":{"used_percentage":\(value)}}
+    """.utf8))
+
+    #expect(payload?.contextWindow == .unavailable)
+}
+
+/// A percentage that is not a representable number — overflowing, or not a number at all — fails
+/// the whole decode rather than being coerced, so a malformed status line drops its cost reading
+/// too instead of half-applying.
+@Test(arguments: ["1e400", "\"82\"", "true"])
+func statusLinePayloadFailsClosedOnUnrepresentableContextPercentage(value: String) {
+    #expect(throws: HookInputError.invalidJSON) {
+        try HookInput.decodeStatusLinePayload(from: Data("""
+        {"session_id":"s1","context_window":{"used_percentage":\(value)}}
+        """.utf8))
+    }
+}
+
+@Test func hookPayloadCarriesContextWindowAndIgnoresRawTokenFields() throws {
+    let data = Data("""
+    {"session_id":"s1","context_window":{"used_percentage":12},
+     "tokens":{"input":10,"output":20},"context_limit":200000,"model":"some-model"}
+    """.utf8)
+    let payload = try HookInput.decodePayload(from: data)
+
+    #expect(payload?.contextWindow == .percentage(12))
+}

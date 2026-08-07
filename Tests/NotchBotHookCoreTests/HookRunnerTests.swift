@@ -221,6 +221,103 @@ private func decodeEvent(_ data: Data) throws -> AgentEvent {
     #expect(event.costUSD == 1.25)
 }
 
+@Test func statusLineContextWindowBecomesASetUpdate() throws {
+    let recorder = Recorder()
+    let payload = try JSONSerialization.data(withJSONObject: [
+        "session_id": "session-ctx",
+        "cost": ["total_cost_usd": 0.5],
+        "context_window": ["used_percentage": 82],
+    ])
+    let status = HookRunner.run(
+        arguments: ["--source", "claude", "--kind", "metadata", "--mode", "statusline"],
+        environment: [:],
+        services: services(input: payload, recorder: recorder)
+    )
+    #expect(status == 0)
+    let event = try decodeEvent(#require(recorder.sent.first))
+    #expect(event.contextWindow?.usedPercentage == 82)
+    #expect(event.costUSD == 0.5)
+    try AgentEventValidator.validate(event)
+}
+
+/// A context reading with no cost still has to reach the app, and a `context_window` object with
+/// no usable percentage is a retraction rather than a no-op.
+@Test func statusLineSendsContextWithoutCostAndClearsOnNullPercentage() throws {
+    let withoutCost = Recorder()
+    let contextOnly = try JSONSerialization.data(withJSONObject: [
+        "session_id": "session-ctx",
+        "context_window": ["used_percentage": 44],
+    ])
+    #expect(HookRunner.run(
+        arguments: ["--source", "claude", "--kind", "metadata", "--mode", "statusline"],
+        environment: [:],
+        services: services(input: contextOnly, recorder: withoutCost)
+    ) == 0)
+    let contextEvent = try decodeEvent(#require(withoutCost.sent.first))
+    #expect(contextEvent.costUSD == nil)
+    #expect(contextEvent.contextWindow?.usedPercentage == 44)
+
+    let cleared = Recorder()
+    let clearing = try JSONSerialization.data(withJSONObject: [
+        "session_id": "session-ctx",
+        "context_window": [:] as [String: Any],
+    ])
+    #expect(HookRunner.run(
+        arguments: ["--source", "claude", "--kind", "metadata", "--mode", "statusline"],
+        environment: [:],
+        services: services(input: clearing, recorder: cleared)
+    ) == 0)
+    let clearedEvent = try decodeEvent(#require(cleared.sent.first))
+    #expect(clearedEvent.contextWindow != nil)
+    #expect(clearedEvent.contextWindow?.usedPercentage == nil)
+    try AgentEventValidator.validate(clearedEvent)
+}
+
+/// Older Claude builds send no `context_window` at all. That must stay a no-update, not a clear,
+/// or a percentage a newer session reported would be wiped on the next status-line tick.
+@Test func statusLineWithoutContextWindowLeavesUsageUntouched() throws {
+    let recorder = Recorder()
+    let payload = try JSONSerialization.data(withJSONObject: [
+        "session_id": "session-legacy",
+        "cost": ["total_cost_usd": 2],
+    ])
+    #expect(HookRunner.run(
+        arguments: ["--source", "claude", "--kind", "metadata", "--mode", "statusline"],
+        environment: [:],
+        services: services(input: payload, recorder: recorder)
+    ) == 0)
+    let event = try decodeEvent(#require(recorder.sent.first))
+    #expect(event.contextWindow == nil)
+}
+
+@Test func openCodeContextWindowRidesOnlyOnMetadataEvents() throws {
+    let metadata = Recorder()
+    let payload = try JSONSerialization.data(withJSONObject: [
+        "session_id": "oc-1",
+        "context_window": ["used_percentage": 63],
+    ])
+    #expect(HookRunner.run(
+        arguments: ["--source", "opencode", "--kind", "metadata"],
+        environment: [:],
+        services: services(input: payload, recorder: metadata)
+    ) == 0)
+    let metadataEvent = try decodeEvent(#require(metadata.sent.first))
+    #expect(metadataEvent.contextWindow?.usedPercentage == 63)
+    try AgentEventValidator.validate(metadataEvent)
+
+    // A lifecycle event carrying usage would fail validation and take the transition with it,
+    // so the helper drops the field instead of forwarding it.
+    let working = Recorder()
+    #expect(HookRunner.run(
+        arguments: ["--source", "opencode", "--kind", "working"],
+        environment: [:],
+        services: services(input: payload, recorder: working)
+    ) == 0)
+    let workingEvent = try decodeEvent(#require(working.sent.first))
+    #expect(workingEvent.contextWindow == nil)
+    try AgentEventValidator.validate(workingEvent)
+}
+
 // Guards the drift the force-unwraps used to hide: parse() allowlists raw strings independently
 // of the enums, so anything it accepts must still map to a case.
 @Test func everyAllowlistedSourceAndKindMapsToAnEnumCase() throws {

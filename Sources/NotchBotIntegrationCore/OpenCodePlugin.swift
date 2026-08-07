@@ -4,10 +4,12 @@ public enum OpenCodePlugin {
     public static func generate(hookPath: String, includeCostTracking: Bool = false) -> String {
         let substitutions = [
             ("{{MARKER}}", NotchBotIntegrationFiles.generatedMarker),
-            ("{{COST_STATE}}", includeCostTracking ? OpenCodePluginSource.costState : ""),
-            ("{{COST_PAYLOAD}}", includeCostTracking ? OpenCodePluginSource.costPayload : ""),
-            ("{{COST_EVENT}}", includeCostTracking ? OpenCodePluginSource.costEvent : ""),
-            ("{{COST_CLEANUP}}", includeCostTracking ? OpenCodePluginSource.costCleanup : ""),
+            ("{{USAGE_STATE}}", includeCostTracking ? OpenCodePluginSource.usageState : ""),
+            ("{{USAGE_HELPERS}}", includeCostTracking ? OpenCodePluginSource.usageHelpers : ""),
+            ("{{USAGE_PAYLOAD}}", includeCostTracking ? OpenCodePluginSource.usagePayload : ""),
+            ("{{USAGE_EVENT}}", includeCostTracking ? OpenCodePluginSource.usageEvent : ""),
+            ("{{USAGE_PARAMS}}", includeCostTracking ? OpenCodePluginSource.usageParams : ""),
+            ("{{USAGE_CLEANUP}}", includeCostTracking ? OpenCodePluginSource.usageCleanup : ""),
             ("{{HOOK_PATH}}", jsonString(hookPath)),
         ]
         return substitutions.reduce(OpenCodePluginSource.template) {

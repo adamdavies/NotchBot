@@ -29,6 +29,30 @@ import Testing
     #expect(!plugin.contains("payload.cost_usd"))
 }
 
+/// Without the opt-in, none of the usage or cost machinery may reach the generated file — not the
+/// hook that reads the model limit, not the token access, and not the payload fields.
+@Test func pluginOmitsAllUsageAndCostCollectionWhenTrackingIsOff() {
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", includeCostTracking: false)
+
+    #expect(!plugin.contains("chat.params"))
+    #expect(!plugin.contains("event.type === \"message.updated\""))
+    #expect(!plugin.contains("event.type === \"session.compacted\""))
+    #expect(!plugin.contains("tokens"))
+    #expect(!plugin.contains("limit?.context"))
+    #expect(!plugin.contains("usageComponent"))
+    #expect(!plugin.contains("contextPercentage"))
+    #expect(!plugin.contains("contextUpdateFor"))
+    #expect(!plugin.contains("sessionContextLimits"))
+    #expect(!plugin.contains("sessionContextPercentages"))
+    #expect(!plugin.contains("context_window"))
+    #expect(!plugin.contains("used_percentage"))
+    #expect(!plugin.contains("payload.cost_usd"))
+    #expect(!plugin.contains("payload.cost_generation"))
+    #expect(!plugin.contains("costGeneration"))
+    #expect(!plugin.contains("messageCosts"))
+    #expect(!plugin.contains("sessionCosts"))
+}
+
 @Test func pluginCostTrackingIsOptInAndDeduplicatesMessageUpdates() {
     let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", includeCostTracking: true)
 
@@ -40,11 +64,71 @@ import Testing
     #expect(plugin.contains("const previous = messageCosts.get(messageKey) ?? 0"))
     #expect(plugin.contains("+ cost - previous"))
     #expect(plugin.contains("map.size >= 10000) return false"))
-    #expect(plugin.contains("if (!setCostBaseline(messageCosts, messageKey, cost)) return"))
-    #expect(plugin.contains("payload.cost_usd = cost.costUSD"))
+    #expect(plugin.contains("setCostBaseline(messageCosts, messageKey, cost)"))
+    #expect(plugin.contains("payload.cost_usd = usage.costUSD"))
     #expect(plugin.contains("payload.cost_generation = costGeneration"))
     #expect(!plugin.contains("payload.input_tokens"))
     #expect(!plugin.contains("payload.output_tokens"))
+}
+
+/// The derived percentage must match what OpenCode's own sidebar shows: the same five token
+/// components over the model context limit, qualified on a completed response.
+@Test func pluginDerivesContextUsageTheSameWayOpenCodeDoes() {
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", includeCostTracking: true)
+
+    #expect(plugin.contains("\"chat.params\": async (input, _output) => {"))
+    #expect(plugin.contains("const limit = input?.model?.limit?.context"))
+    #expect(plugin.contains("setBounded(sessionContextLimits, sid, limit)"))
+
+    #expect(plugin.contains("const output = usageComponent(tokens.output)"))
+    #expect(plugin.contains("+ usageComponent(tokens.input)"))
+    #expect(plugin.contains("+ usageComponent(tokens.reasoning)"))
+    #expect(plugin.contains("+ usageComponent(tokens.cache?.read)"))
+    #expect(plugin.contains("+ usageComponent(tokens.cache?.write)"))
+    #expect(plugin.contains("if (!Number.isFinite(output) || output <= 0) return undefined"))
+    #expect(plugin.contains("Number.isFinite(value) && value >= 0 ? value : NaN"))
+    #expect(plugin.contains("const percentage = Math.round((total / limit) * 100)"))
+    #expect(plugin.contains("return Math.min(100, Math.max(0, percentage))"))
+
+    // Only the derived scalar crosses the boundary.
+    #expect(plugin.contains("payload.context_window = usage.contextWindow === null"))
+    #expect(plugin.contains(": { used_percentage: usage.contextWindow }"))
+    #expect(!plugin.contains("payload.tokens"))
+    #expect(!plugin.contains("payload.context_limit"))
+    #expect(!plugin.contains("payload.model"))
+    #expect(!plugin.contains("input.model.id"))
+    #expect(!plugin.contains("providerID"))
+}
+
+@Test func pluginClearsContextUsageWhenItStopsBeingTrue() {
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", includeCostTracking: true)
+
+    #expect(plugin.contains("event.type === \"session.compacted\" || event.type === \"message.removed\""))
+    #expect(plugin.contains("if (!sid || !sessionContextPercentages.has(sid)) return"))
+    #expect(plugin.contains("{ contextWindow: null }"))
+    // No stored percentage means nothing to retract, so no event is sent.
+    #expect(plugin.contains("if (previous === undefined) return undefined"))
+    // A completed response with no usable context limit clears rather than keeping a stale figure.
+    #expect(plugin.contains("if (typeof limit !== \"number\" || !Number.isFinite(limit) || limit <= 0) return null"))
+
+    // Session deletion drops every per-session map alongside the existing `cleared` event.
+    #expect(plugin.contains("sessionContextLimits.delete(sessionID)"))
+    #expect(plugin.contains("sessionContextPercentages.delete(sessionID)"))
+}
+
+@Test func pluginDeduplicatesContextAndCostIndependently() {
+    let plugin = OpenCodePlugin.generate(hookPath: "/tmp/hook", includeCostTracking: true)
+
+    #expect(plugin.contains("const contextWindow = contextUpdateFor(sid, message.tokens)"))
+    // Either one alone is enough to send; neither suppresses the other.
+    #expect(plugin.contains("if (sessionCost == null && contextWindow === undefined) return"))
+    #expect(plugin.contains("{ costUSD: sessionCost, contextWindow }"))
+    #expect(plugin.contains("if (derived === previous) return undefined"))
+    #expect(plugin.contains("setBounded(sessionContextPercentages, sessionID, derived)"))
+    // Per-session usage state stays bounded like every other map in the plugin.
+    #expect(plugin.contains("const sessionContextLimits = new Map()"))
+    #expect(plugin.contains("const sessionContextPercentages = new Map()"))
+    #expect(plugin.contains("map.size >= 256"))
 }
 
 @Test func pluginBoundsLifecycleStateAndHandlesRejectedQuestions() {
@@ -60,7 +144,14 @@ import Testing
     #expect(plugin.contains("const hookPath = \"/tmp/a\\\"b\\\\c\""))
 }
 
-@Test(arguments: ["{{COST_STATE}}", "{{COST_PAYLOAD}}", "{{COST_EVENT}}", "{{COST_CLEANUP}}"])
+@Test(arguments: [
+    "{{USAGE_STATE}}",
+    "{{USAGE_HELPERS}}",
+    "{{USAGE_PAYLOAD}}",
+    "{{USAGE_EVENT}}",
+    "{{USAGE_PARAMS}}",
+    "{{USAGE_CLEANUP}}",
+])
 func pluginPreservesPlaceholderTextInHookPath(placeholder: String) {
     let hookPath = "/tmp/\(placeholder)/notchbot-hook"
 

@@ -178,13 +178,13 @@ final class IntegrationInstaller: ObservableObject {
                 name: .notchBotCostTrackingEnabled,
                 object: environment.defaults
             )
-            message = "Cost tracking enabled"
+            message = "Usage and cost tracking enabled"
         } catch {
             if (try? ownership.isOwnedPlugin(at: paths.openCodePlugin)) == true {
                 try? plugin.write(hookURL: paths.installedHook, includeCostTracking: false)
             }
             costTracking.cleanupIncompleteFiles()
-            message = "Cost tracking failed: \(error.localizedDescription)"
+            message = "Usage and cost tracking failed: \(error.localizedDescription)"
         }
     }
 
@@ -193,9 +193,9 @@ final class IntegrationInstaller: ObservableObject {
             try costTracking.disable()
             clearCostTrackingPreferences()
             costTrackingEnabled = false
-            message = "Cost tracking disabled"
+            message = "Usage and cost tracking disabled"
         } catch {
-            message = "Disable cost tracking failed: \(error.localizedDescription)"
+            message = "Disable usage and cost tracking failed: \(error.localizedDescription)"
         }
     }
 

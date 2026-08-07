@@ -1113,6 +1113,165 @@ import Testing
     #expect(reducer.primarySession?.costUSD == 0.08)
 }
 
+@Test func metadataContextUsageReplacesClearsAndPreserves() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .working, sessionID: "session", timestamp: start
+    ))
+    #expect(reducer.primarySession?.contextUsedPercentage == nil)
+
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 61)
+    ))
+    #expect(reducer.primarySession?.contextUsedPercentage == 61)
+
+    // Metadata with no usage update must not disturb the stored figure.
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(2), costUSD: 0.4
+    ))
+    #expect(reducer.primarySession?.contextUsedPercentage == 61)
+
+    // Compaction legitimately moves the number down.
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(3),
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 12)
+    ))
+    #expect(reducer.primarySession?.contextUsedPercentage == 12)
+
+    // An explicit retraction empties it.
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(4), contextWindow: .unavailable
+    ))
+    #expect(reducer.primarySession?.contextUsedPercentage == nil)
+}
+
+@Test func contextUsageArrivingBeforeLifecycleMergesIntoTheSession() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "session", timestamp: start,
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 77)
+    ))
+    #expect(reducer.sessionCount == 0)
+    #expect(reducer.pendingMetadataCount == 1)
+
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .working, sessionID: "session",
+        timestamp: start.addingTimeInterval(1)
+    ))
+    #expect(reducer.primarySession?.contextUsedPercentage == 77)
+}
+
+/// Usage is metadata: it must not make a session look freshly active, or a quiet session would
+/// never age out while its provider kept reporting a percentage.
+@Test func contextUsageDoesNotRefreshLifecycleTimestamps() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "session", timestamp: start
+    ))
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(60),
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 90)
+    ))
+
+    #expect(reducer.primarySession?.updatedAt == start)
+    reducer.removeSessions(olderThan: start.addingTimeInterval(30))
+    #expect(reducer.sessionCount == 0)
+}
+
+@Test func contextUsageIsTrackedPerSessionAcrossParentAndSubagent() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .working, sessionID: "root", timestamp: start
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .working, sessionID: "child", parentSessionID: "root",
+        timestamp: start.addingTimeInterval(1)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "root",
+        timestamp: start.addingTimeInterval(2),
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 30)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "child",
+        timestamp: start.addingTimeInterval(3),
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 85)
+    ))
+
+    #expect(reducer.activity(source: .opencode, sessionID: "root")?.contextUsedPercentage == 30)
+    #expect(reducer.activity(source: .opencode, sessionID: "child")?.contextUsedPercentage == 85)
+
+    // Clearing one leaves the other alone.
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "child",
+        timestamp: start.addingTimeInterval(4), contextWindow: .unavailable
+    ))
+    #expect(reducer.activity(source: .opencode, sessionID: "root")?.contextUsedPercentage == 30)
+    #expect(reducer.activity(source: .opencode, sessionID: "child")?.contextUsedPercentage == nil)
+}
+
+@Test func clearingContextUsageEmptiesLiveAndPendingState() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "live", timestamp: start
+    ))
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "live",
+        timestamp: start.addingTimeInterval(1),
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 95)
+    ))
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .metadata, sessionID: "pending",
+        timestamp: start.addingTimeInterval(2),
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 55)
+    ))
+
+    reducer.clearContextWindowUsage()
+
+    #expect(reducer.activity(source: .claude, sessionID: "live")?.contextUsedPercentage == nil)
+    reducer.apply(AgentEvent(
+        source: .claude, kind: .working, sessionID: "pending",
+        timestamp: start.addingTimeInterval(3)
+    ))
+    #expect(reducer.activity(source: .claude, sessionID: "pending")?.contextUsedPercentage == nil)
+}
+
+@Test func clearingASessionDropsItsContextUsage() {
+    let start = Date(timeIntervalSince1970: 100)
+    var reducer = ActivityReducer()
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .working, sessionID: "session", timestamp: start
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .metadata, sessionID: "session",
+        timestamp: start.addingTimeInterval(1),
+        contextWindow: ContextWindowUsageUpdate(usedPercentage: 70)
+    ))
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .cleared, sessionID: "session",
+        timestamp: start.addingTimeInterval(2)
+    ))
+    #expect(reducer.sessionCount == 0)
+
+    reducer.apply(AgentEvent(
+        source: .opencode, kind: .working, sessionID: "session",
+        timestamp: start.addingTimeInterval(3)
+    ))
+    #expect(reducer.primarySession?.contextUsedPercentage == nil)
+}
+
 @Test func resolvedRequestClearsStaleProviderReason() {
     var reducer = ActivityReducer()
     let start = Date(timeIntervalSince1970: 100)
