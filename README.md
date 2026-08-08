@@ -1,7 +1,7 @@
 # NotchBot
 
 <p align="center">
-  <img src="Packaging/NotchBot.png" alt="NotchBot app icon" width="180">
+  <img src="Packaging/example.gif" alt="NotchBot app icon" width="520">
 </p>
 
 NotchBot is a native macOS menu-bar companion for AI coding agents. It extends a MacBook notch with a pixel robot that sleeps with drifting Zs while idle, walks while an agent is working, and jumps with a yellow pulse when an agent needs attention.
